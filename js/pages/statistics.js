@@ -131,5 +131,3 @@ function initStatisticsCharts() {
   });
 }
 
-// BAŞLAT
-render();

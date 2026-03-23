@@ -1,4 +1,3 @@
-<script>
 const DB = {
   get(key) { const data = localStorage.getItem('pp_' + key); try { return data ? JSON.parse(data) : []; } catch(e) { return []; } },
   set(key, data) { localStorage.setItem('pp_' + key, JSON.stringify(data)); },

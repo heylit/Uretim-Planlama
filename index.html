@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="tr" class="">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Üretim Planlama Sistemi</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+<script>
+tailwind.config = {
+  darkMode: 'class',
+  theme: {
+    extend: {
+      colors: {
+        primary: { 50:'#eff6ff',100:'#dbeafe',200:'#bfdbfe',300:'#93c5fd',400:'#60a5fa',500:'#3b82f6',600:'#2563eb',700:'#1d4ed8' }
+      },
+      fontFamily: { sans: ['Inter','system-ui','sans-serif'] }
+    }
+  }
+}
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body class="bg-gray-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 font-sans">
+
+<div id="root" class="flex h-screen overflow-hidden">
+  <aside id="sidebar" class="sidebar-transition w-64 bg-slate-900 text-white flex flex-col flex-shrink-0 overflow-hidden">
+    <div class="p-4 border-b border-slate-700/50">
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 bg-primary-500 rounded-lg flex items-center justify-center">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M2 20a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8l-7 5V8l-7 5V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"/></svg>
+        </div>
+        <div class="sidebar-text">
+          <div class="font-bold text-sm leading-tight">Üretim Planlama</div>
+          <div class="text-[10px] text-slate-400">Yönetim Sistemi</div>
+        </div>
+      </div>
+    </div>
+    <nav class="flex-1 p-3 space-y-1 overflow-y-auto" id="sidebar-nav"></nav>
+    <div class="p-3 border-t border-slate-700/50">
+      <a href="terminal.html" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors text-slate-400 hover:text-white hover:bg-slate-800/50">
+        <i data-lucide="tablet-smartphone" class="w-[18px] h-[18px] flex-shrink-0"></i>
+        <span class="sidebar-text">Saha Terminali</span>
+      </a>
+    </div>
+  </aside>
+
+  <div class="flex-1 flex flex-col overflow-hidden min-w-0">
+    <header class="h-12 border-b border-slate-200 dark:border-slate-700 flex items-center px-4 justify-between bg-white dark:bg-slate-900 flex-shrink-0">
+      <button onclick="toggleSidebar()" class="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500">
+        <i data-lucide="menu" class="w-5 h-5"></i>
+      </button>
+      <div class="flex items-center gap-2">
+        <span id="header-title" class="text-sm font-semibold text-slate-600 dark:text-slate-300"></span>
+      </div>
+      <button onclick="toggleDarkMode()" class="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500">
+        <i data-lucide="moon" class="w-5 h-5 dark:hidden"></i>
+        <i data-lucide="sun" class="w-5 h-5 hidden dark:block"></i>
+      </button>
+    </header>
+    <main id="app" class="flex-1 overflow-y-auto p-6 bg-gray-50 dark:bg-slate-950"></main>
+  </div>
+</div>
+
+<div class="toast-container" id="toast-container"></div>
+
+<!-- Core -->
+<script src="js/db.js"></script>
+<script src="js/seed.js"></script>
+<script src="js/utils.js"></script>
+<script src="js/scheduler.js"></script>
+<script src="js/statistics.js"></script>
+<script src="js/ui.js"></script>
+
+<!-- Pages -->
+<script src="js/pages/dashboard.js"></script>
+<script src="js/pages/shifts.js"></script>
+<script src="js/pages/shipping.js"></script>
+<script src="js/pages/orders.js"></script>
+<script src="js/pages/work-orders.js"></script>
+<script src="js/pages/inventory.js"></script>
+<script src="js/pages/product-routes.js"></script>
+<script src="js/pages/planning.js"></script>
+<script src="js/pages/capacity.js"></script>
+<script src="js/pages/statistics.js"></script>
+<script src="js/pages/stations.js"></script>
+<script src="js/pages/employees.js"></script>
+
+<!-- Bootstrap -->
+<script>render();</script>
+
+</body>
+</html>

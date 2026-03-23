@@ -1,49 +1,3 @@
-<!DOCTYPE html>
-<html lang="tr">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Saha Terminali v33</title>
-<script src="https://cdn.tailwindcss.com"></script>
-<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
-<script>
-tailwind.config = {
-  theme: {
-    extend: {
-      colors: { primary: { 500:'#3b82f6', 600:'#2563eb', 700:'#1d4ed8' } },
-      fontFamily: { sans: ['Inter', 'sans-serif'] }
-    }
-  }
-}
-</script>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&display=swap" rel="stylesheet">
-<style>
-  body { background-color: #f8fafc; color: #0f172a; -webkit-tap-highlight-color: transparent; }
-  .toast-container { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 9999; width: 90%; max-width: 400px; }
-  .fade-in { animation: fadeIn 0.2s ease-in-out; }
-  @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-  .stat-card { background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); }
-</style>
-</head>
-<body>
-
-  <header class="bg-slate-900 text-white p-4 flex items-center justify-between sticky top-0 z-50 shadow-md">
-    <div class="flex items-center gap-3">
-      <button id="back-btn" onclick="goBack()" class="hidden p-2 -ml-2 bg-slate-800 rounded-lg text-slate-300"><i data-lucide="chevron-left" class="w-6 h-6"></i></button>
-      <div>
-        <h1 class="text-lg font-black tracking-tight" id="header-title">Üretim Terminali</h1>
-        <p class="text-[10px] text-blue-400 font-bold uppercase tracking-widest" id="header-subtitle">Yükleniyor...</p>
-      </div>
-    </div>
-    <div id="user-profile" class="hidden flex items-center gap-2">
-      <button onclick="logout()" class="w-10 h-10 bg-red-500/10 rounded-full flex items-center justify-center border border-red-500/30 text-red-400"><i data-lucide="log-out" class="w-4 h-4"></i></button>
-    </div>
-  </header>
-
-  <main id="app" class="p-4 pb-24 fade-in"></main>
-  <div class="toast-container" id="toast-container"></div>
-
-<script>
 const DB = {
   get(key) { const data = localStorage.getItem('pp_' + key); try { return data ? JSON.parse(data) : []; } catch(e) { return []; } },
   set(key, data) { localStorage.setItem('pp_' + key, JSON.stringify(data)); },
@@ -343,6 +297,3 @@ function startJob(stepId) {
 }
 
 render();
-</script>
-</body>
-</html>

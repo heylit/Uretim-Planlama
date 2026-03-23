@@ -23,4 +23,3 @@ function getDateRange(mode, refDate) {
   if (mode === 'month') { const s = new Date(d.getFullYear(), d.getMonth(), 1); const e = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999); return { start: s, end: e, days: Math.round((e - s) / 86400000) + 1 }; }
   const s = new Date(d.getFullYear(), 0, 1); const e = new Date(d.getFullYear(), 11, 31, 23, 59, 59, 999); return { start: s, end: e, days: Math.round((e - s) / 86400000) + 1 };
 }
-

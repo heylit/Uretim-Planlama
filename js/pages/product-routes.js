@@ -22,9 +22,9 @@ function renderProductRoutes() {
 
 function showAddRouteModal(routeId) {
     const routes = DB.get('product_routes');
-    if (routeId) { const r = routes.find(x => x.id === routeId); tempRouteState = JSON.parse(JSON.stringify(r)); } 
+    if (routeId) { const r = routes.find(x => x.id === routeId); tempRouteState = JSON.parse(JSON.stringify(r)); }
     else { tempRouteState = { id: null, productName: '', isTemplate: true, steps: [{ stationId: '', estimatedMinutes: 60, setupMinutes: 15, dependency: 'serial' }] }; }
-    
+
     showModal(routeId ? 'Rota Şablonunu Düzenle' : 'Yeni Rota Şablonu', `<div class="space-y-4"><div><label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Rota Şablon Adı</label><input id="route-product-input" type="text" value="${tempRouteState.productName}" class="w-full border border-slate-300 dark:border-slate-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-slate-700 font-bold focus:ring-2 focus:ring-primary-500 outline-none" placeholder="Örn: Standart İHA Rotası" onchange="tempRouteState.productName = this.value"></div><div><div class="flex items-center justify-between mb-2"><label class="text-xs font-medium text-slate-600 dark:text-slate-400">Üretim Adımları (Operasyonlar)</label><button onclick="addRouteStepState()" class="text-xs text-primary-600 hover:text-primary-700 font-bold flex items-center gap-1 bg-primary-50 dark:bg-primary-900/30 px-2 py-1 rounded border border-primary-200 dark:border-primary-800"><i data-lucide="plus" class="w-3 h-3"></i> Adım Ekle</button></div><div id="route-steps-container" class="space-y-3 max-h-[50vh] overflow-y-auto p-1 custom-scrollbar"></div></div></div>`, () => saveRouteState());
     renderRouteStepsState();
 }
@@ -46,9 +46,8 @@ function saveRouteState() {
     if (!tempRouteState.productName) return toast('Ad gerekli', 'error'); if (tempRouteState.steps.length === 0) return toast('Adım gerekli', 'error');
     for(let i=0; i<tempRouteState.steps.length; i++) { const s = tempRouteState.steps[i]; if(!s.stationId || !s.estimatedMinutes) return toast('Eksik bilgi', 'error'); s.stepOrder = s.stepOrder || (i + 1); }
     const routes = DB.get('product_routes');
-    if (tempRouteState.id) { const idx = routes.findIndex(r => r.id === tempRouteState.id); if (idx >= 0) routes[idx] = tempRouteState; } 
+    if (tempRouteState.id) { const idx = routes.findIndex(r => r.id === tempRouteState.id); if (idx >= 0) routes[idx] = tempRouteState; }
     else { tempRouteState.id = DB.nextId('product_routes'); tempRouteState.isTemplate = true; routes.push(tempRouteState); }
     DB.set('product_routes', routes); closeModal(); toast('Rota eklendi'); render();
 }
 function deleteRoute(id) { confirmDialog('Silmek istediğinize emin misiniz?', () => { DB.set('product_routes', DB.get('product_routes').filter(r => r.id !== id)); toast('Rota silindi', 'info'); render(); }); }
-

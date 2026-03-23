@@ -69,7 +69,7 @@ function renderLogin() {
 
 function renderOperatorDashboard() {
   const perf = getUserPerformance(currentUser.id);
-  const stations = DB.get('stations').filter(s => DB.get('station_assignments').filter(a => a.employeeId === currentUser.id).map(a => a.stationId).includes(s.id));
+  const stations = DB.get('stations').filter(s => s.status === 'active' && (!currentUser.stationId || s.id === currentUser.stationId));
   const steps = DB.get('work_order_steps'); const wos = DB.get('work_orders'); const reqs = DB.get('material_requests'); const allStations = DB.get('stations');
   const routes = DB.get('product_routes');
 

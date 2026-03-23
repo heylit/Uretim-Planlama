@@ -1,7 +1,7 @@
 // ============ AKILLI ZAMAN VE VARDİYA MOTORU ============
 function getStationBlocks(stationId, date) {
    const st = DB.get('stations').find(s=>s.id===stationId);
-   if(!st || !st.shiftIds || st.shiftIds.length === 0) return [];
+   if(!st || st.status !== 'active' || !st.shiftIds || st.shiftIds.length === 0) return [];
    const allShifts = DB.get('shifts');
    const dayOfWeek = date.getDay();
    let blocks = [];

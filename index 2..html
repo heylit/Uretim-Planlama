@@ -1,0 +1,1219 @@
+<!DOCTYPE html>
+<html lang="tr" class="">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Üretim Planlama Sistemi</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+<script>
+tailwind.config = {
+  darkMode: 'class',
+  theme: {
+    extend: {
+      colors: {
+        primary: { 50:'#eff6ff',100:'#dbeafe',200:'#bfdbfe',300:'#93c5fd',400:'#60a5fa',500:'#3b82f6',600:'#2563eb',700:'#1d4ed8' }
+      },
+      fontFamily: { sans: ['Inter','system-ui','sans-serif'] }
+    }
+  }
+}
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  [x-cloak] { display: none !important; }
+  .sidebar-transition { transition: width 0.2s ease, opacity 0.2s ease; }
+  .gantt-bar { position: absolute; top: 4px; bottom: 4px; border-radius: 4px; cursor: grab; min-width: 4px; z-index: 10; transition: left 0.3s ease, width 0.3s ease; }
+  .gantt-bar:hover { filter: brightness(1.15); z-index: 20; }
+  .gantt-bar:active { cursor: grabbing; }
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 100; display: flex; align-items: center; justify-content: center; }
+  .modal-content { background: white; border-radius: 12px; max-width: 600px; width: 95%; max-height: 90vh; overflow-y: auto; }
+  .dark .modal-content { background: #1e293b; color: #e2e8f0; }
+  .toast-container { position: fixed; bottom: 20px; right: 20px; z-index: 200; display: flex; flex-direction: column; gap: 8px; }
+  .heatmap-cell { width: 24px; height: 24px; border-radius: 3px; font-size: 8px; display: flex; align-items: center; justify-content: center; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 3px; }
+  .dark ::-webkit-scrollbar-thumb { background: #475569; }
+  .drag-over { border-top: 2px solid #3b82f6 !important; background-color: #eff6ff !important; }
+  .dark .drag-over { background-color: #1e3a8a !important; }
+</style>
+</head>
+<body class="bg-gray-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 font-sans">
+
+<div id="root" class="flex h-screen overflow-hidden">
+  <aside id="sidebar" class="sidebar-transition w-64 bg-slate-900 text-white flex flex-col flex-shrink-0 overflow-hidden">
+    <div class="p-4 border-b border-slate-700/50">
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 bg-primary-500 rounded-lg flex items-center justify-center">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M2 20a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8l-7 5V8l-7 5V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"/></svg>
+        </div>
+        <div class="sidebar-text">
+          <div class="font-bold text-sm leading-tight">Üretim Planlama</div>
+          <div class="text-[10px] text-slate-400">Yönetim Sistemi v6.8</div>
+        </div>
+      </div>
+    </div>
+    <nav class="flex-1 p-3 space-y-1 overflow-y-auto" id="sidebar-nav"></nav>
+  </aside>
+
+  <div class="flex-1 flex flex-col overflow-hidden min-w-0">
+    <header class="h-12 border-b border-slate-200 dark:border-slate-700 flex items-center px-4 justify-between bg-white dark:bg-slate-900 flex-shrink-0">
+      <button onclick="toggleSidebar()" class="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500">
+        <i data-lucide="menu" class="w-5 h-5"></i>
+      </button>
+      <div class="flex items-center gap-2">
+        <span id="header-title" class="text-sm font-semibold text-slate-600 dark:text-slate-300"></span>
+      </div>
+      <button onclick="toggleDarkMode()" class="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500">
+        <i data-lucide="moon" class="w-5 h-5 dark:hidden"></i>
+        <i data-lucide="sun" class="w-5 h-5 hidden dark:block"></i>
+      </button>
+    </header>
+    <main id="app" class="flex-1 overflow-y-auto p-6 bg-gray-50 dark:bg-slate-950"></main>
+  </div>
+</div>
+
+<div class="toast-container" id="toast-container"></div>
+
+<script>
+// ============ DATA LAYER ============
+const DB = {
+  get(key) { try { return JSON.parse(localStorage.getItem('pp_' + key) || '[]'); } catch { return []; } },
+  set(key, data) { localStorage.setItem('pp_' + key, JSON.stringify(data)); },
+  nextId(key) { const items = this.get(key); return items.length > 0 ? Math.max(...items.map(i => i.id)) + 1 : 1; }
+};
+
+// ============ SEED DATA ============
+function seedData() {
+  if (localStorage.getItem('pp_initialized_v68')) return;
+
+  const shifts = [
+    { id:1, name:'1. Vardiya (Gündüz)', startTime:'08:00', endTime:'16:00', days:[1,2,3,4,5] },
+    { id:2, name:'2. Vardiya (Akşam)', startTime:'16:00', endTime:'00:00', days:[1,2,3,4,5] }
+  ];
+
+  const stations = [
+    { id:1, name:'Montaj Hattı A', code:'MH-001', type:'assembly', shiftIds:[1], status:'active' },
+    { id:2, name:'CNC İşleme', code:'CNC-001', type:'machining', shiftIds:[1,2], status:'active' }, 
+    { id:3, name:'Kaynak Atölyesi', code:'KY-001', type:'welding', shiftIds:[1], status:'active' }
+  ];
+
+  const materials = [
+    { id:1, code:'M-001', name:'Karbon Gövde', unit:'adet', stock:100 },
+    { id:5, code:'M-005', name:'Çelik Mil (mm)', unit:'mm', stock:15000 }
+  ];
+
+  const product_routes = [
+    { id:1, productName:'Standart Silindir Rotası', isTemplate: true, steps:[
+      { stepOrder: 1, dependency: 'serial', stationId:2, estimatedMinutes:20, setupMinutes: 45 },
+      { stepOrder: 2, dependency: 'serial', stationId:3, estimatedMinutes:15, setupMinutes: 20 },
+      { stepOrder: 3, dependency: 'serial', stationId:1, estimatedMinutes:30, setupMinutes: 0 }
+    ]}
+  ];
+
+  DB.set('shifts', shifts);
+  DB.set('stations', stations);
+  DB.set('employees', []);
+  DB.set('station_assignments', []);
+  DB.set('materials', materials);
+  DB.set('product_bom', []);
+  DB.set('product_routes', product_routes);
+  DB.set('customer_orders', []);
+  DB.set('work_orders', []);
+  DB.set('work_order_steps', []);
+  DB.set('production_logs', []);
+  DB.set('shipments', []); 
+  
+  localStorage.setItem('pp_initialized_v68', 'true');
+}
+seedData();
+
+// ============ YARDIMCI FONKSİYONLAR ============
+function formatDate(d) { if (!d) return '-'; const p = d.split('-'); return p.length === 3 ? `${p[2]}.${p[1]}.${p[0]}` : d; }
+function formatDateTime(dt) { if (!dt) return '-'; const [date, time] = dt.split('T'); return formatDate(date) + ' ' + (time ? time.substring(0,5) : ''); }
+function priorityBarColor(p) { return { urgent:'#ef4444', high:'#f97316', normal:'#3b82f6', low:'#9ca3af' }[p] || '#3b82f6'; }
+function statusLabel(s) { return { new:'Yeni', planning:'Planlama', production:'Üretimde', ready_to_ship:'Üretim Bitti', shipped:'Sevk Edildi', completed:'Tamamlandı', cancelled:'İptal', pending:'Beklemede', in_progress:'Devam Ediyor' }[s] || s; }
+function statusColor(s) { return { new:'bg-blue-100 text-blue-700', planning:'bg-yellow-100 text-yellow-700', production:'bg-indigo-100 text-indigo-700', ready_to_ship:'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300', shipped:'bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300', completed:'bg-slate-100 text-slate-600', cancelled:'bg-red-100 text-red-700', pending:'bg-yellow-100 text-yellow-700', in_progress:'bg-green-100 text-green-700' }[s] || 'bg-gray-100 text-gray-700'; }
+function roleLabel(r) { return { operator:'Operatör', technician:'Teknisyen', engineer:'Mühendis', warehouse:'Depo Sorumlusu', supervisor:'Süpervizör' }[r] || r; }
+function empStatusLabel(s) { return { active:'Aktif', on_leave:'İzinli', inactive:'Pasif' }[s] || s; }
+function empStatusColor(s) { return { active:'bg-green-100 text-green-700', on_leave:'bg-yellow-100 text-yellow-700', inactive:'bg-red-100 text-red-700' }[s] || 'bg-gray-100 text-gray-700'; }
+function stationTypeLabel(t) { return { assembly:'Montaj', machining:'İşleme', welding:'Kaynak', painting:'Boya', packaging:'Paketleme' }[t] || t; }
+function utilizationColor(pct) {
+  if (pct <= 30) return { text:'text-green-600', bg:'bg-green-100', bar:'bg-green-500', hex:'#22c55e' };
+  if (pct <= 60) return { text:'text-blue-600', bg:'bg-blue-100', bar:'bg-blue-500', hex:'#3b82f6' };
+  if (pct <= 80) return { text:'text-yellow-600', bg:'bg-yellow-100', bar:'bg-yellow-500', hex:'#eab308' };
+  if (pct <= 100) return { text:'text-orange-600', bg:'bg-orange-100', bar:'bg-orange-500', hex:'#f97316' };
+  return { text:'text-red-600', bg:'bg-red-100', bar:'bg-red-500', hex:'#ef4444' };
+}
+
+function getDateRange(mode, refDate) {
+  const d = new Date(refDate);
+  if (mode === 'day') { const s = new Date(d); s.setHours(0,0,0,0); const e = new Date(d); e.setHours(23,59,59,999); return { start: s, end: e, days: 1 }; }
+  if (mode === 'week') { const day = d.getDay(); const diff = d.getDate() - day + (day === 0 ? -6 : 1); const s = new Date(d); s.setDate(diff); s.setHours(0,0,0,0); const e = new Date(s); e.setDate(s.getDate() + 6); e.setHours(23,59,59,999); return { start: s, end: e, days: 5 }; }
+  if (mode === 'month') { const s = new Date(d.getFullYear(), d.getMonth(), 1); const e = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999); return { start: s, end: e, days: Math.round((e - s) / 86400000) + 1 }; }
+  const s = new Date(d.getFullYear(), 0, 1); const e = new Date(d.getFullYear(), 11, 31, 23, 59, 59, 999); return { start: s, end: e, days: Math.round((e - s) / 86400000) + 1 };
+}
+
+// ============ AKILLI ZAMAN VE VARDİYA MOTORU ============
+function getStationBlocks(stationId, date) {
+   const st = DB.get('stations').find(s=>s.id===stationId);
+   if(!st || !st.shiftIds || st.shiftIds.length === 0) return [];
+   const allShifts = DB.get('shifts');
+   const dayOfWeek = date.getDay(); 
+   let blocks = [];
+   
+   st.shiftIds.forEach(shId => {
+      const shift = allShifts.find(s => s.id === parseInt(shId));
+      if(shift && shift.days.includes(dayOfWeek)) {
+         const [sh, sm] = shift.startTime.split(':').map(Number);
+         let [eh, em] = shift.endTime.split(':').map(Number);
+         
+         let isNextDay = false;
+         if(eh < sh || (eh === sh && em <= sm)) isNextDay = true; 
+         if(eh === 0 && em === 0) { eh = 24; isNextDay = false; } 
+         
+         let bStart = new Date(date); bStart.setHours(sh, sm, 0, 0);
+         let bEnd = new Date(date); 
+         if(isNextDay) bEnd.setDate(bEnd.getDate() + 1);
+         bEnd.setHours(eh === 24 ? 23 : eh, eh === 24 ? 59 : em, eh === 24 ? 59 : 0, 0);
+         
+         blocks.push({start: bStart, end: bEnd});
+      }
+   });
+   blocks.sort((a,b) => a.start - b.start);
+   return blocks;
+}
+
+// İSTASYON BOŞLUK DOLDURMA ALGORİTMASI (Gelişmiş Gap-Filling)
+function findNextAvailableSlot(stationId, afterDate, durationMinutes, allStepsArray) {
+  const steps = allStepsArray || DB.get('work_order_steps');
+  const stationSteps = steps.filter(s => s.stationId === stationId && s.plannedStart && s.plannedEnd && s.status !== 'completed');
+  
+  let remaining = durationMinutes;
+  let cursor = new Date(afterDate).getTime();
+  
+  let plannedStart = null;
+  let plannedEnd = null;
+  let sanityLimit = 365;
+
+  while (remaining > 0 && sanityLimit > 0) {
+      sanityLimit--;
+      let d = new Date(cursor);
+      let blocks = getStationBlocks(stationId, d);
+      
+      for (let block of blocks) {
+          if (remaining <= 0) break;
+          let bs = block.start.getTime();
+          let be = block.end.getTime();
+          
+          if (cursor >= be) continue; 
+          let cs = Math.max(bs, cursor);
+          
+          // O vardiyadaki diğer planlanmış işleri bul
+          let overlaps = stationSteps.filter(s => {
+              let ss = new Date(s.plannedStart).getTime();
+              let se = new Date(s.plannedEnd).getTime();
+              return se > cs && ss < be;
+          }).sort((a,b) => new Date(a.plannedStart).getTime() - new Date(b.plannedStart).getTime());
+          
+          for (let step of overlaps) {
+              if (remaining <= 0) break;
+              let ss = new Date(step.plannedStart).getTime();
+              let se = new Date(step.plannedEnd).getTime();
+              
+              if (cs < ss) {
+                  let gap = (ss - cs) / 60000;
+                  if (gap > 0) {
+                      if (!plannedStart) plannedStart = new Date(cs);
+                      let take = Math.min(remaining, gap);
+                      remaining -= take;
+                      cs += take * 60000;
+                      plannedEnd = new Date(cs);
+                  }
+              }
+              if (cs < se) cs = se;
+          }
+          
+          // Vardiya bitmeden süre kaldıysa
+          if (remaining > 0 && cs < be) {
+              if (!plannedStart) plannedStart = new Date(cs);
+              let gap = (be - cs) / 60000;
+              let take = Math.min(remaining, gap);
+              remaining -= take;
+              cs += take * 60000;
+              plannedEnd = new Date(cs);
+          }
+          cursor = cs;
+      }
+      
+      if (remaining > 0) {
+          let nd = new Date(cursor);
+          nd.setDate(nd.getDate() + 1);
+          nd.setHours(0,0,0,0);
+          cursor = nd.getTime();
+      }
+  }
+  
+  if(!plannedStart) {
+      plannedStart = new Date(afterDate); plannedStart.setHours(8,0,0,0);
+      plannedEnd = new Date(plannedStart.getTime() + durationMinutes * 60000);
+  }
+  
+  return { start: plannedStart, end: plannedEnd };
+}
+
+function calcStationLoadInRange(stationId, start, end) { 
+  const steps = DB.get('work_order_steps'); 
+  const inRangeSteps = steps.filter(s => s.stationId === stationId && s.status !== 'completed' && s.plannedStart && s.plannedEnd);
+  
+  let totalMins = 0;
+  inRangeSteps.forEach(s => {
+      let ss = new Date(Math.max(new Date(s.plannedStart).getTime(), new Date(start).getTime()));
+      let se = new Date(Math.min(new Date(s.plannedEnd).getTime(), new Date(end).getTime()));
+      if (se > ss) totalMins += (se.getTime() - ss.getTime()) / 60000;
+  });
+  return totalMins / 60; 
+}
+
+function calcStationCapacityInRange(stationId, start, end) {
+    let capMins = 0;
+    let cursor = new Date(start); cursor.setHours(0,0,0,0);
+    let endLimit = new Date(end);
+    
+    while(cursor <= endLimit) {
+        let blocks = getStationBlocks(stationId, cursor);
+        blocks.forEach(b => {
+            let bs = new Date(Math.max(b.start.getTime(), start.getTime()));
+            let be = new Date(Math.min(b.end.getTime(), end.getTime()));
+            if (be > bs) capMins += (be.getTime() - bs.getTime()) / 60000;
+        });
+        cursor.setDate(cursor.getDate() + 1);
+    }
+    return capMins / 60;
+}
+
+// BÜTÜN İŞLERİ SIRALAYAN VE PLANLAYAN ANA MOTOR
+function recalculateSchedules() {
+    let wos = DB.get('work_orders');
+    wos.forEach((w,i) => { if(w.queueIndex === undefined) w.queueIndex = i; });
+    wos = wos.sort((a,b) => a.queueIndex - b.queueIndex);
+    
+    const allSteps = DB.get('work_order_steps');
+    const routes = DB.get('product_routes');
+
+    // Henüz başlamamış olanların planlarını sıfırla
+    allSteps.forEach(s => {
+        if(s.status === 'pending') { s.plannedStart = null; s.plannedEnd = null; }
+    });
+
+    let globalNextStart = new Date();
+
+    wos.forEach(wo => {
+        if(wo.status === 'completed' || wo.status === 'shipped') return;
+        const woSteps = allSteps.filter(s => s.workOrderId === wo.id).sort((a,b) => parseInt(a.stepOrder||1) - parseInt(b.stepOrder||1));
+        const route = routes.find(r => r.productName === wo.product && !r.isTemplate) || routes.find(r => r.productName === wo.product);
+        
+        let currentWoStart = new Date(globalNextStart);
+        
+        woSteps.forEach(step => {
+            const rStep = route?.steps.find(x => x.stationId === step.stationId && x.stepOrder === step.stepOrder);
+            const isParallel = rStep && rStep.dependency === 'parallel';
+            
+            const totalDuration = (step.estimatedMinutes * (wo.quantity||1)) + (step.setupMinutes || 0);
+
+            if (step.status === 'completed') {
+                currentWoStart = new Date(step.actualEnd || currentWoStart);
+            } else if (step.status === 'in_progress') {
+                // Çalışan işi bozmayalım, planlanan bitişine göre devam etsin
+                let st = new Date(step.actualStart); if(isNaN(st)) st = new Date();
+                const slot = findNextAvailableSlot(step.stationId, st, totalDuration, allSteps.filter(s=>s.id !== step.id));
+                step.plannedStart = slot.start.toISOString();
+                step.plannedEnd = slot.end.toISOString();
+                currentWoStart = new Date(step.plannedEnd);
+            } else {
+                // Akıllı boşluk doldurma algoritması
+                const slot = findNextAvailableSlot(step.stationId, currentWoStart, totalDuration, allSteps);
+                step.plannedStart = slot.start.toISOString(); 
+                step.plannedEnd = slot.end.toISOString();
+                
+                // Eğer SERİ ise, bir sonraki aşama kesinlikle bu işin bitişinden sonra başlamalı
+                if (!isParallel) {
+                    currentWoStart = new Date(slot.end);
+                }
+            }
+        });
+    });
+    
+    DB.set('work_orders', wos);
+    DB.set('work_order_steps', allSteps);
+}
+
+// ============ MERKEZİ İSTATİSTİK FONKSİYONU ============
+function getStepStats(step) {
+    const wos = DB.get('work_orders');
+    const wo = wos.find(w => w.id === step.workOrderId);
+    if (!wo) return null;
+
+    const routes = DB.get('product_routes');
+    const route = routes.find(r => r.productName === wo.product && !r.isTemplate) || routes.find(r => r.productName === wo.product);
+    const rStep = route?.steps.find(s => parseInt(s.stationId) === parseInt(step.stationId));
+    
+    const qty = wo.quantity || 1;
+    const estMin = rStep ? (parseInt(rStep.estimatedMinutes) || 0) : 0;
+    const setupMin = rStep ? (parseInt(rStep.setupMinutes) || 0) : 0;
+    
+    const plannedTime = (estMin * qty) + setupMin;
+
+    const logs = DB.get('production_logs').filter(l => l.stepId === step.id);
+    let actualTime = 0;
+    let lastDate = step.actualEnd || step.actualStart || new Date().toISOString();
+    
+    if (logs.length > 0 && logs.some(l => l.duration)) {
+        actualTime = logs.reduce((sum, l) => sum + (parseInt(l.duration) || 0), 0);
+        lastDate = logs[logs.length-1].date;
+    } else if (step.actualStart && step.actualEnd) {
+        actualTime = Math.max(0, (new Date(step.actualEnd) - new Date(step.actualStart)) / 60000);
+    }
+
+    return {
+        stepId: step.id,
+        stationId: step.stationId,
+        wo: wo,
+        st: DB.get('stations').find(s => s.id === step.stationId),
+        planned: plannedTime,
+        actual: actualTime,
+        eff: actualTime > 0 ? Math.round((plannedTime / actualTime) * 100) : 0,
+        date: new Date(lastDate)
+    };
+}
+
+
+// ============ TOAST & MODAL ============
+function toast(message, type = 'success') {
+  const tc = document.getElementById('toast-container');
+  const colors = { success:'bg-green-500', error:'bg-red-500', info:'bg-blue-500', warning:'bg-yellow-500' };
+  const div = document.createElement('div');
+  div.className = `${colors[type] || colors.info} text-white px-4 py-2 rounded-lg shadow-lg text-sm font-medium transition-all transform translate-x-0`;
+  div.textContent = message; tc.appendChild(div);
+  setTimeout(() => { div.style.opacity = '0'; setTimeout(() => div.remove(), 300); }, 3000);
+}
+
+function showModal(title, contentHtml, onSave) {
+  const existing = document.getElementById('modal-overlay'); if (existing) existing.remove();
+  const overlay = document.createElement('div'); overlay.id = 'modal-overlay'; overlay.className = 'modal-overlay';
+  overlay.innerHTML = `<div class="modal-content shadow-2xl"><div class="flex items-center justify-between p-4 border-b border-slate-200 dark:border-slate-700"><h3 class="text-lg font-bold text-slate-800 dark:text-white">${title}</h3><button onclick="closeModal()" class="p-1 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg"><i data-lucide="x" class="w-5 h-5"></i></button></div><div class="p-4" id="modal-body">${contentHtml}</div><div class="flex justify-end gap-2 p-4 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 rounded-b-12px"><button onclick="closeModal()" class="px-4 py-2 text-sm rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 font-medium">İptal</button><button id="modal-save-btn" class="px-5 py-2 text-sm rounded-lg bg-primary-600 text-white hover:bg-primary-700 font-bold shadow-sm">Kaydet</button></div></div>`;
+  document.body.appendChild(overlay); overlay.addEventListener('click', e => { if (e.target === overlay) closeModal(); });
+  if (onSave) document.getElementById('modal-save-btn').addEventListener('click', onSave);
+  lucide.createIcons();
+}
+function closeModal() { const m = document.getElementById('modal-overlay'); if (m) m.remove(); }
+function confirmDialog(msg, onConfirm) {
+  showModal('Onay', `<p class="text-sm text-slate-600 dark:text-slate-300">${msg}</p>`, () => { closeModal(); onConfirm(); });
+  document.getElementById('modal-save-btn').textContent = 'Evet, Sil'; document.getElementById('modal-save-btn').className = 'px-4 py-2 text-sm rounded-lg bg-red-600 text-white hover:bg-red-700 font-medium';
+}
+
+// ============ SIDEBAR & ROUTING ============
+const NAV_ITEMS = [
+  { id:'dashboard', label:'Dashboard', icon:'layout-dashboard' },
+  { id:'orders', label:'Siparişler', icon:'shopping-cart' },
+  { id:'work-orders', label:'İş Emirleri', icon:'clipboard-list' },
+  { id:'shipping', label:'Sevkiyat', icon:'truck' },
+  { id:'planning', label:'Üretim Planı (Gantt)', icon:'gantt-chart' },
+  { id:'inventory', label:'Stok & Reçete (BOM)', icon:'package' },
+  { id:'product-routes', label:'Ürün Rotaları', icon:'route' },
+  { id:'shifts', label:'Vardiya Ayarları', icon:'clock' }, 
+  { id:'stations', label:'İstasyonlar', icon:'factory' },
+  { id:'employees', label:'Çalışanlar', icon:'users' },
+  { id:'capacity', label:'Kapasite (Yük)', icon:'gauge' },
+  { id:'statistics', label:'İstatistikler', icon:'line-chart' }
+];
+
+const PAGE_TITLES = { dashboard:'Dashboard', orders:'Siparişler', 'work-orders':'İş Emirleri Sıralaması', shipping:'Sevkiyat', planning:'Üretim Planı', inventory:'Stok & Reçete', shifts: 'Vardiya ve Çalışma Saatleri', stations:'İstasyon Yönetimi', employees:'Çalışan Yönetimi', capacity:'Kapasite Raporu', 'product-routes':'Ürün Rotaları Şablonları', statistics:'Gelişmiş İstatistikler' };
+
+function renderSidebar() {
+  const current = (window.location.hash || '#/').replace('#/', '') || 'dashboard';
+  document.getElementById('sidebar-nav').innerHTML = NAV_ITEMS.map(item => `
+    <a href="#/${item.id}" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${current === item.id ? 'bg-slate-700/50 text-white font-medium' : 'text-slate-400 hover:text-white hover:bg-slate-800/50'}">
+      <i data-lucide="${item.icon}" class="w-[18px] h-[18px] flex-shrink-0"></i><span class="sidebar-text">${item.label}</span>
+    </a>
+  `).join('');
+}
+
+let sidebarOpen = true;
+function toggleSidebar() { sidebarOpen = !sidebarOpen; document.getElementById('sidebar').style.width = sidebarOpen ? '256px' : '0px'; }
+function toggleDarkMode() { document.documentElement.classList.toggle('dark'); localStorage.setItem('pp_dark', document.documentElement.classList.contains('dark')); }
+if (localStorage.getItem('pp_dark') === 'true') document.documentElement.classList.add('dark');
+function getCurrentPage() { return (window.location.hash || '#/').replace('#/', '') || 'dashboard'; }
+function navigateTo(page) { window.location.hash = '#/' + page; }
+
+let chartInstances = {};
+function destroyCharts() { Object.values(chartInstances).forEach(c => { try { c.destroy(); } catch {} }); chartInstances = {}; }
+
+let orderFilter = 'all';
+let expandedWorkOrders = new Set();
+let expandedStations = new Set();
+let dashboardPeriod = 'week';
+let planningMode = 'week'; let planningRef = new Date();
+let capacityMode = 'week'; let capacityRef = new Date();
+let statsPeriod = 'daily'; 
+
+function render() {
+  destroyCharts(); const page = getCurrentPage(); renderSidebar();
+  document.getElementById('header-title').textContent = PAGE_TITLES[page] || 'Dashboard';
+  const app = document.getElementById('app');
+  switch (page) {
+    case 'dashboard': app.innerHTML = renderDashboard(); initDashboardCharts(); break;
+    case 'orders': app.innerHTML = renderOrders(); break;
+    case 'work-orders': app.innerHTML = renderWorkOrders(); break;
+    case 'shipping': app.innerHTML = renderShipping(); break;
+    case 'planning': app.innerHTML = renderPlanning(); initPlanningDrag(); break;
+    case 'inventory': app.innerHTML = renderInventory(); break;
+    case 'shifts': app.innerHTML = renderShifts(); break;
+    case 'stations': app.innerHTML = renderStations(); break;
+    case 'employees': app.innerHTML = renderEmployees(); break;
+    case 'capacity': app.innerHTML = renderCapacity(); break;
+    case 'product-routes': app.innerHTML = renderProductRoutes(); break;
+    case 'statistics': app.innerHTML = renderStatistics(); initStatisticsCharts(); break;
+    default: app.innerHTML = renderDashboard(); initDashboardCharts();
+  }
+  lucide.createIcons();
+}
+window.addEventListener('hashchange', render);
+
+// ============ PAGE: DASHBOARD ============
+function renderDashboard() {
+  const stations = DB.get('stations'); const orders = DB.get('customer_orders'); const wos = DB.get('work_orders');
+  const activeStations = stations.filter(s => s.status === 'active').length; const pendingWOs = wos.filter(w => w.status === 'pending').length; const inProgressWOs = wos.filter(w => w.status === 'in_progress').length; const urgentWOs = wos.filter(w => w.priority === 'urgent' && w.status !== 'completed').length;
+  const range = getDateRange(dashboardPeriod, new Date()); 
+  
+  const totalCapacity = stations.filter(s => s.status === 'active').reduce((sum, st) => sum + calcStationCapacityInRange(st.id, range.start, range.end), 0);
+  const totalLoad = stations.filter(s => s.status === 'active').reduce((sum, st) => sum + calcStationLoadInRange(st.id, range.start, range.end), 0);
+  
+  const overallUtil = totalCapacity > 0 ? Math.round(totalLoad / totalCapacity * 100) : 0; const uc = utilizationColor(overallUtil);
+
+  let stationBars = stations.filter(s => s.status === 'active').map(st => {
+    const load = calcStationLoadInRange(st.id, range.start, range.end); const cap = calcStationCapacityInRange(st.id, range.start, range.end); const pct = cap > 0 ? Math.round(load / cap * 100) : 0; const c = utilizationColor(pct);
+    return `<div class="flex items-center gap-3 text-sm"><span class="w-28 text-xs font-medium truncate">${st.name}</span><div class="flex-1 bg-slate-200 dark:bg-slate-700 rounded-full h-4 overflow-hidden"><div class="${c.bar} h-full rounded-full transition-all" style="width:${Math.min(pct,100)}%"></div></div><span class="w-12 text-right text-xs font-bold ${c.text}">${pct}%</span></div>`;
+  }).join('');
+
+  const periodLabels = { day:'Gün', week:'Hafta', month:'Ay', year:'Yıl' };
+  const periodBtns = ['day','week','month','year'].map(p => `<button onclick="dashboardPeriod='${p}'; render();" class="px-3 py-1 text-xs rounded-md font-medium ${dashboardPeriod===p ? 'bg-primary-600 text-white' : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-300 dark:hover:bg-slate-600'}">${periodLabels[p]}</button>`).join('');
+
+  return `<div class="max-w-7xl mx-auto space-y-6"><div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">${kpiCard('factory','Aktif İstasyon',`${activeStations}/${stations.length}`,'İstasyon çalışıyor','blue')}${kpiCard('shopping-cart','Toplam Sipariş',orders.length,`${orders.filter(o=>o.status==='production').length} üretimde`,'green')}${kpiCard('clipboard-list','İş Emirleri',wos.length,`${pendingWOs} beklemede, ${inProgressWOs} devam`,'yellow')}${kpiCard('alert-triangle','Acil Emirler',urgentWOs,'Dikkat gerektiriyor','red')}</div><div class="grid grid-cols-1 lg:grid-cols-3 gap-6"><div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-5 lg:col-span-2"><div class="flex items-center justify-between mb-4"><h3 class="font-bold text-sm">Doluluk Oranı (Kalan İşler)</h3><div class="flex gap-1">${periodBtns}</div></div><div class="flex items-start gap-6"><div class="text-center flex-shrink-0"><div class="text-5xl font-bold ${uc.text}">${overallUtil}%</div><div class="text-xs text-slate-500 mt-1">Genel Doluluk</div><div class="text-xs text-slate-400 mt-0.5">${totalLoad.toFixed(1)} / ${totalCapacity.toFixed(1)} sa</div></div><div class="flex-1 space-y-2.5">${stationBars}</div></div></div><div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-5"><h3 class="font-bold text-sm mb-4">Sipariş Durumu</h3><div style="height:200px;"><canvas id="chart-order-status"></canvas></div></div></div><div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-5"><h3 class="font-bold text-sm mb-4">İstasyon Kapasite Yükü</h3><div style="height:260px;"><canvas id="chart-station-cap"></canvas></div></div></div>`;
+}
+
+function kpiCard(icon, title, value, sub, color) {
+  const colors = { blue:'bg-blue-50 text-blue-600', green:'bg-green-50 text-green-600', yellow:'bg-yellow-50 text-yellow-600', red:'bg-red-50 text-red-600' };
+  return `<div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 flex items-start gap-3"><div class="${colors[color]} p-2.5 rounded-lg"><i data-lucide="${icon}" class="w-5 h-5"></i></div><div><div class="text-xs text-slate-500 dark:text-slate-400 font-medium">${title}</div><div class="text-2xl font-bold mt-0.5">${value}</div><div class="text-xs text-slate-400 dark:text-slate-500 mt-0.5">${sub}</div></div></div>`;
+}
+
+function initDashboardCharts() {
+  requestAnimationFrame(() => {
+    const orders = DB.get('customer_orders'); const isDark = document.documentElement.classList.contains('dark'); const textColor = isDark ? '#94a3b8' : '#64748b';
+    const statusCounts = {}; orders.forEach(o => { statusCounts[o.status] = (statusCounts[o.status] || 0) + 1; });
+    const donutEl = document.getElementById('chart-order-status');
+    if (donutEl) { chartInstances['orderStatus'] = new Chart(donutEl, { type: 'doughnut', data: { labels: Object.keys(statusCounts).map(statusLabel), datasets: [{ data: Object.values(statusCounts), backgroundColor: ['#3b82f6','#eab308','#22c55e','#a855f7','#14b8a6','#ef4444','#94a3b8'], borderWidth: 0 }] }, options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position:'bottom', labels: { color: textColor, font: { size: 10 } } } }, cutout: '65%' } }); }
+
+    const stations = DB.get('stations').filter(s => s.status === 'active');
+    const range = getDateRange(dashboardPeriod, new Date());
+    const barEl = document.getElementById('chart-station-cap');
+    
+    if (barEl) {
+      const loads = stations.map(st => calcStationLoadInRange(st.id, range.start, range.end));
+      const caps = stations.map(st => calcStationCapacityInRange(st.id, range.start, range.end));
+      chartInstances['stationCap'] = new Chart(barEl, { type: 'bar', data: { labels: stations.map(s => s.name), datasets: [ { label: 'Planlanan Yük (sa)', data: loads, backgroundColor: '#3b82f6', borderRadius: 4 }, { label: 'Maks. Kapasite (sa)', data: caps, backgroundColor: isDark ? '#334155' : '#e2e8f0', borderRadius: 4 } ] }, options: { responsive: true, maintainAspectRatio: false, scales: { x: { ticks: { color: textColor, font: { size: 11 } }, grid: { display: false } }, y: { ticks: { color: textColor }, grid: { color: isDark ? '#334155' : '#e2e8f0' } } }, plugins: { legend: { labels: { color: textColor, font: { size: 11 } } } } } });
+    }
+  });
+}
+
+
+// ============ PAGE: SHIFTS (VARDİYALAR) ============
+function renderShifts() {
+    const shifts = DB.get('shifts');
+    const dayNames = ['Paz','Pzt','Sal','Çar','Per','Cum','Cmt'];
+    
+    const rows = shifts.map(sh => {
+        const activeDays = [1,2,3,4,5,6,0].map(d => {
+            const isActive = sh.days.includes(d);
+            return `<span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${isActive ? 'bg-green-100 text-green-700 border border-green-200' : 'bg-slate-100 text-slate-400 opacity-50'}">${dayNames[d]}</span>`;
+        }).join(' ');
+        
+        return `<tr class="border-b border-slate-100 dark:border-slate-700/50 hover:bg-slate-50 dark:hover:bg-slate-800/50 text-sm">
+            <td class="py-3 px-4 font-bold text-primary-600">${sh.name}</td>
+            <td class="py-3 px-4 font-mono font-bold">${sh.startTime}</td>
+            <td class="py-3 px-4 font-mono font-bold">${sh.endTime}</td>
+            <td class="py-3 px-4 flex gap-1 flex-wrap">${activeDays}</td>
+            <td class="py-3 px-4 text-right">
+                <div class="flex items-center justify-end gap-1">
+                    <button onclick="editShift(${sh.id})" class="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-500"><i data-lucide="pencil" class="w-4 h-4"></i></button>
+                    <button onclick="deleteShift(${sh.id})" class="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/30 text-red-500"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
+                </div>
+            </td>
+        </tr>`;
+    }).join('');
+
+    return `<div class="max-w-7xl mx-auto space-y-4">
+        <div class="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800/50 rounded-xl p-3 flex items-center gap-3 text-sm text-blue-800 dark:text-blue-300 mb-4">
+            <i data-lucide="clock" class="w-5 h-5 text-blue-600"></i> 
+            <span>Burada tanımladığınız vardiyaları <b>İstasyonlar</b> sayfasında makinelere atayarak her makinenin çalışma saatlerini ve günlük kapasitesini kusursuz hesaplatabilirsiniz. (Gece vardiyaları desteklenmektedir)</span>
+        </div>
+        <div class="flex justify-between items-end">
+            <h2 class="text-lg font-bold">Vardiya ve Mesai Ayarları</h2>
+            <button onclick="createShift()" class="flex items-center gap-1 px-4 py-2 bg-primary-600 text-white rounded-lg text-sm font-bold shadow hover:bg-primary-700 transition-colors"><i data-lucide="plus" class="w-4 h-4"></i> Yeni Vardiya</button>
+        </div>
+        <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-x-auto shadow-sm">
+            <table class="w-full text-left">
+                <thead><tr class="border-b border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-500 uppercase tracking-wider bg-slate-50 dark:bg-slate-900/50"><th class="py-3 px-4">Vardiya Adı</th><th class="py-3 px-4">Başlangıç</th><th class="py-3 px-4">Bitiş</th><th class="py-3 px-4">Çalışma Günleri</th><th class="py-3 px-4 text-right">İşlem</th></tr></thead>
+                <tbody>${rows || `<tr><td colspan="5" class="text-center py-6 text-sm text-slate-500">Vardiya kaydı bulunamadı.</td></tr>`}</tbody>
+            </table>
+        </div>
+    </div>`;
+}
+
+function shiftFormHtml(sh = {}) {
+    const days = sh.days || [1,2,3,4,5]; 
+    const isDayChecked = (d) => days.includes(d) ? 'checked' : '';
+    return `<div class="space-y-4">
+        <div><label class="text-xs font-medium text-slate-600 dark:text-slate-400">Vardiya Adı</label><input id="f-shName" class="w-full mt-1 px-3 py-2 text-sm border border-slate-300 dark:border-slate-600 rounded-lg dark:bg-slate-700 font-bold focus:ring-2 focus:ring-primary-500 outline-none" placeholder="Örn: 1. Vardiya" value="${sh.name || ''}"></div>
+        <div class="grid grid-cols-2 gap-4">
+            <div><label class="text-xs font-medium text-slate-600 dark:text-slate-400">Başlangıç Saati</label><input type="time" id="f-shStart" class="w-full mt-1 px-3 py-2 text-sm border border-slate-300 dark:border-slate-600 rounded-lg dark:bg-slate-700 font-mono font-bold text-center focus:ring-2 focus:ring-primary-500 outline-none" value="${sh.startTime || '08:00'}"></div>
+            <div><label class="text-xs font-medium text-slate-600 dark:text-slate-400">Bitiş Saati</label><input type="time" id="f-shEnd" class="w-full mt-1 px-3 py-2 text-sm border border-slate-300 dark:border-slate-600 rounded-lg dark:bg-slate-700 font-mono font-bold text-center focus:ring-2 focus:ring-primary-500 outline-none" value="${sh.endTime || '16:00'}"></div>
+        </div>
+        <div>
+            <label class="text-xs font-medium text-slate-600 dark:text-slate-400 block mb-2">Çalışma Günleri</label>
+            <div class="flex flex-wrap gap-2">
+                <label class="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-600 px-3 py-1.5 rounded-lg cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition shadow-sm"><input type="checkbox" class="sh-day-chk accent-primary-600 w-4 h-4" value="1" ${isDayChecked(1)}> <span class="text-xs font-bold">Pzt</span></label>
+                <label class="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-600 px-3 py-1.5 rounded-lg cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition shadow-sm"><input type="checkbox" class="sh-day-chk accent-primary-600 w-4 h-4" value="2" ${isDayChecked(2)}> <span class="text-xs font-bold">Sal</span></label>
+                <label class="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-600 px-3 py-1.5 rounded-lg cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition shadow-sm"><input type="checkbox" class="sh-day-chk accent-primary-600 w-4 h-4" value="3" ${isDayChecked(3)}> <span class="text-xs font-bold">Çar</span></label>
+                <label class="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-600 px-3 py-1.5 rounded-lg cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition shadow-sm"><input type="checkbox" class="sh-day-chk accent-primary-600 w-4 h-4" value="4" ${isDayChecked(4)}> <span class="text-xs font-bold">Per</span></label>
+                <label class="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-600 px-3 py-1.5 rounded-lg cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition shadow-sm"><input type="checkbox" class="sh-day-chk accent-primary-600 w-4 h-4" value="5" ${isDayChecked(5)}> <span class="text-xs font-bold">Cum</span></label>
+                <label class="flex items-center gap-1.5 bg-orange-50 dark:bg-orange-900/30 border border-orange-200 dark:border-orange-800/50 px-3 py-1.5 rounded-lg cursor-pointer hover:bg-orange-100 transition shadow-sm"><input type="checkbox" class="sh-day-chk accent-orange-600 w-4 h-4" value="6" ${isDayChecked(6)}> <span class="text-xs font-bold text-orange-700 dark:text-orange-400">Cmt</span></label>
+                <label class="flex items-center gap-1.5 bg-orange-50 dark:bg-orange-900/30 border border-orange-200 dark:border-orange-800/50 px-3 py-1.5 rounded-lg cursor-pointer hover:bg-orange-100 transition shadow-sm"><input type="checkbox" class="sh-day-chk accent-orange-600 w-4 h-4" value="0" ${isDayChecked(0)}> <span class="text-xs font-bold text-orange-700 dark:text-orange-400">Paz</span></label>
+            </div>
+        </div>
+    </div>`;
+}
+
+function createShift() {
+    showModal('Yeni Vardiya / Mesai Oluştur', shiftFormHtml(), () => {
+        const name = document.getElementById('f-shName').value.trim();
+        const start = document.getElementById('f-shStart').value;
+        const end = document.getElementById('f-shEnd').value;
+        let days = []; document.querySelectorAll('.sh-day-chk:checked').forEach(c => days.push(parseInt(c.value)));
+        
+        if(!name || !start || !end || days.length === 0) return toast('Lütfen tüm alanları doldurun ve en az 1 gün seçin', 'error');
+        
+        const shifts = DB.get('shifts');
+        shifts.push({ id: DB.nextId('shifts'), name, startTime: start, endTime: end, days });
+        DB.set('shifts', shifts);
+        closeModal(); toast('Vardiya şablonu eklendi.'); render();
+    });
+}
+
+function editShift(id) {
+    const shifts = DB.get('shifts'); const sh = shifts.find(x => x.id === id); if(!sh) return;
+    showModal('Vardiyayı Düzenle', shiftFormHtml(sh), () => {
+        sh.name = document.getElementById('f-shName').value.trim();
+        sh.startTime = document.getElementById('f-shStart').value;
+        sh.endTime = document.getElementById('f-shEnd').value;
+        let days = []; document.querySelectorAll('.sh-day-chk:checked').forEach(c => days.push(parseInt(c.value)));
+        
+        if(!sh.name || !sh.startTime || !sh.endTime || days.length === 0) return toast('Lütfen tüm alanları doldurun ve en az 1 gün seçin', 'error');
+        sh.days = days;
+        DB.set('shifts', shifts);
+        closeModal(); toast('Vardiya güncellendi'); 
+        if(confirm("Vardiya saatleri değiştiği için tüm üretim çizelgesinin (Gantt) yeniden hesaplanmasını ister misiniz?")) { recalculateSchedules(); }
+        render();
+    });
+}
+
+function deleteShift(id) {
+    confirmDialog('Bu vardiyayı silmek istediğinize emin misiniz? (Bu vardiyayı kullanan istasyonlar etkilenebilir)', () => {
+        DB.set('shifts', DB.get('shifts').filter(s => s.id !== id));
+        toast('Vardiya silindi', 'info'); render();
+    });
+}
+
+// ============ PAGE: SEVKİYAT ============
+function renderShipping() {
+  const orders = DB.get('customer_orders'); const shipments = DB.get('shipments') || []; const readyOrders = orders.filter(o => o.status === 'ready_to_ship'); const pastShipments = shipments.sort((a,b) => new Date(b.date) - new Date(a.date));
+  const readyRows = readyOrders.map(o => `<tr class="border-b border-slate-100 dark:border-slate-700/50 hover:bg-slate-50 dark:hover:bg-slate-800/50 text-sm transition"><td class="py-3 px-4 font-mono font-bold text-purple-600 dark:text-purple-400">${o.orderNo}</td><td class="py-3 px-4 font-medium">${o.customer}</td><td class="py-3 px-4">${o.product}</td><td class="py-3 px-4 text-right font-bold">${o.quantity}</td><td class="py-3 px-4 text-right"><button onclick="showShipModal(${o.id})" class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-xs font-bold hover:bg-indigo-700 shadow-sm flex items-center gap-1 ml-auto"><i data-lucide="truck" class="w-4 h-4"></i> Sevk Et</button></td></tr>`).join('');
+  const historyRows = pastShipments.map(sh => { const o = orders.find(x => x.id === sh.orderId) || {}; return `<tr class="border-b border-slate-100 dark:border-slate-700/50 text-sm"><td class="py-3 px-4 text-slate-500">${formatDate(sh.date)}</td><td class="py-3 px-4 font-mono text-slate-700 dark:text-slate-300">${o.orderNo || '-'}</td><td class="py-3 px-4">${o.customer || '-'}</td><td class="py-3 px-4 font-bold">${sh.carrier}</td><td class="py-3 px-4 font-mono text-xs">${sh.trackingNo || '-'}</td><td class="py-3 px-4"><span class="px-2 py-1 rounded-full text-xs font-bold bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-400 border border-teal-200 dark:border-teal-800"><i data-lucide="check" class="w-3 h-3 inline mr-0.5"></i> Yolda</span></td></tr>`; }).join('');
+  return `<div class="max-w-7xl mx-auto space-y-8"><div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden shadow-sm"><div class="px-5 py-4 border-b border-purple-100 dark:border-slate-700 bg-purple-50 dark:bg-slate-800/80 flex justify-between items-center"><h3 class="font-bold text-sm text-purple-800 dark:text-purple-400 flex items-center gap-2"><i data-lucide="package-check" class="w-5 h-5"></i> Üretimi Bitenler (Sevkiyat Bekleyen Siparişler)</h3></div><table class="w-full text-left"><thead><tr class="text-xs font-bold text-slate-500 bg-slate-50 dark:bg-slate-900/50 border-b border-slate-200 dark:border-slate-700 uppercase tracking-wider"><th class="py-3 px-4">Sipariş No</th><th class="py-3 px-4">Müşteri</th><th class="py-3 px-4">Ürün</th><th class="py-3 px-4 text-right">Miktar</th><th class="py-3 px-4 text-right">İşlem</th></tr></thead><tbody>${readyRows || `<tr><td colspan="5" class="text-center py-10 text-sm text-slate-500">Şu anda sevkiyat bekleyen sipariş bulunmuyor.</td></tr>`}</tbody></table></div><div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden shadow-sm"><div class="px-5 py-4 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 flex justify-between items-center"><h3 class="font-bold text-sm text-slate-700 dark:text-slate-300 flex items-center gap-2"><i data-lucide="history" class="w-5 h-5"></i> Sevkiyat Geçmişi</h3></div><table class="w-full text-left"><thead><tr class="text-xs font-bold text-slate-500 bg-slate-50 dark:bg-slate-900/50 border-b border-slate-200 dark:border-slate-700 uppercase tracking-wider"><th class="py-3 px-4">Sevk Tarihi</th><th class="py-3 px-4">Sipariş No</th><th class="py-3 px-4">Müşteri</th><th class="py-3 px-4">Kargo/Nakliye Firması</th><th class="py-3 px-4">İrsaliye/Takip No</th><th class="py-3 px-4">Durum</th></tr></thead><tbody>${historyRows || `<tr><td colspan="6" class="text-center py-10 text-sm text-slate-500">Geçmiş sevkiyat kaydı bulunmuyor.</td></tr>`}</tbody></table></div></div>`;
+}
+
+function showShipModal(orderId) {
+  const o = DB.get('customer_orders').find(x => x.id === orderId); if(!o) return;
+  showModal('Sevkiyat Oluştur', `<div class="space-y-4"><div class="bg-purple-50 dark:bg-purple-900/20 p-4 rounded-xl border border-purple-100 dark:border-purple-800/50 text-sm shadow-inner"><div class="flex justify-between mb-2"><span class="text-slate-500">Sipariş No:</span> <span class="font-bold text-purple-700 font-mono">${o.orderNo}</span></div><div class="flex justify-between mb-2"><span class="text-slate-500">Müşteri:</span> <span class="font-bold">${o.customer}</span></div><div class="flex justify-between"><span class="text-slate-500">Sevk Edilecek Ürün:</span> <span class="font-bold">${o.product} (${o.quantity} Adet)</span></div></div><div><label class="text-xs font-bold text-slate-500 uppercase">Kargo / Nakliye Firması</label><input id="f-shipCarrier" class="w-full mt-1 px-3 py-3 text-sm border border-slate-300 dark:border-slate-600 rounded-lg dark:bg-slate-700 focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="Örn: Yurtiçi Kargo, X Lojistik"></div><div><label class="text-xs font-bold text-slate-500 uppercase">İrsaliye / Takip No</label><input id="f-shipTrack" class="w-full mt-1 px-3 py-3 text-sm border border-slate-300 dark:border-slate-600 rounded-lg dark:bg-slate-700 focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="Örn: TR-987654321"></div><div><label class="text-xs font-bold text-slate-500 uppercase">Sevk Tarihi</label><input type="date" id="f-shipDate" class="w-full mt-1 px-3 py-3 text-sm border border-slate-300 dark:border-slate-600 rounded-lg dark:bg-slate-700 focus:ring-2 focus:ring-indigo-500 outline-none" value="${new Date().toISOString().slice(0,10)}"></div></div>`, () => {
+     const carrier = document.getElementById('f-shipCarrier').value.trim(); const track = document.getElementById('f-shipTrack').value.trim(); const date = document.getElementById('f-shipDate').value;
+     if(!carrier) return toast('Kargo firması zorunludur', 'error');
+     const shipments = DB.get('shipments') || []; shipments.push({ id: DB.nextId('shipments'), orderId: o.id, carrier, trackingNo: track, date, status: 'shipped' }); DB.set('shipments', shipments);
+     const orders = DB.get('customer_orders'); const orderIndex = orders.findIndex(x => x.id === o.id);
+     if(orderIndex !== -1) { orders[orderIndex].status = 'shipped'; DB.set('customer_orders', orders); }
+     closeModal(); toast('Sevkiyat oluşturuldu!', 'success'); render();
+  });
+  const btn = document.getElementById('modal-save-btn'); btn.textContent = "Yola Çıkar"; btn.className = "px-6 py-2.5 text-sm rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 font-bold shadow-md flex items-center gap-2"; btn.innerHTML = `<i data-lucide="truck" class="w-4 h-4"></i> Yola Çıkar`; lucide.createIcons();
+}
+
+// ============ PAGE: ORDERS ============
+function renderOrders() {
+  const orders = DB.get('customer_orders'); const filtered = orderFilter === 'all' ? orders : orders.filter(o => o.status === orderFilter);
+  const filters = [ { key:'all', label:'Tümü' }, { key:'new', label:'Yeni' }, { key:'production', label:'Üretimde' }, { key:'ready_to_ship', label:'Sevkiyat Bekliyor' }, { key:'shipped', label:'Sevk Edildi' } ];
+  const filterBtns = filters.map(f => `<button onclick="orderFilter='${f.key}'; render();" class="px-3 py-1.5 text-xs rounded-lg font-medium transition-colors ${orderFilter===f.key ? 'bg-primary-600 text-white' : 'bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 text-slate-600'}">${f.label}</button>`).join('');
+  const rows = filtered.map(o => `<tr class="border-b border-slate-100 dark:border-slate-700/50 hover:bg-slate-50 dark:hover:bg-slate-800/50 text-sm"><td class="py-3 px-4 font-mono font-medium text-primary-600">${o.orderNo}</td><td class="py-3 px-4">${o.customer}</td><td class="py-3 px-4">${o.product}</td><td class="py-3 px-4 text-right font-bold">${o.quantity}</td><td class="py-3 px-4">${formatDate(o.dueDate)}</td><td class="py-3 px-4"><span class="px-2 py-0.5 rounded-full text-xs font-medium ${statusColor(o.status)}">${statusLabel(o.status)}</span></td><td class="py-3 px-4">${o.workOrderId ? `<span class="text-xs font-mono text-primary-600">WO-${o.workOrderId}</span>` : '-'}</td><td class="py-3 px-4"><div class="flex items-center gap-1">${o.status === 'new' ? `<button onclick="planOrder(${o.id})" class="p-1.5 rounded-lg bg-primary-50 text-primary-600 hover:bg-primary-100" title="Planla"><i data-lucide="play" class="w-3.5 h-3.5"></i></button>` : ''}<button onclick="editOrder(${o.id})" class="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-500"><i data-lucide="pencil" class="w-3.5 h-3.5"></i></button><button onclick="deleteOrder(${o.id})" class="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/30 text-red-500"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button></div></td></tr>`).join('');
+  return `<div class="max-w-7xl mx-auto space-y-4"><div class="flex flex-wrap items-center justify-between gap-3"><div class="flex gap-2 flex-wrap">${filterBtns}</div><button onclick="createOrder()" class="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg text-sm font-medium hover:bg-primary-700"><i data-lucide="plus" class="w-4 h-4"></i> Yeni Sipariş</button></div><div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-x-auto"><table class="w-full text-left"><thead><tr class="border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 text-xs font-semibold text-slate-500 uppercase"><th class="py-3 px-4">Sipariş No</th><th class="py-3 px-4">Müşteri</th><th class="py-3 px-4">Ürün</th><th class="py-3 px-4 text-right">Miktar</th><th class="py-3 px-4">Teslim</th><th class="py-3 px-4">Durum</th><th class="py-3 px-4">İş Emri</th><th class="py-3 px-4">İşlem</th></tr></thead><tbody>${rows || `<tr><td colspan="8" class="text-center py-6 text-sm text-slate-500">Kayıt bulunamadı</td></tr>`}</tbody></table></div></div>`;
+}
+
+function orderFormHtml(o = {}) {
+  const boms = DB.get('product_bom'); const productOptions = boms.map(b => `<option value="${b.productName}" ${o.product === b.productName ? 'selected' : ''}>${b.productName}</option>`).join('');
+  return `<div class="space-y-3"><div><label class="text-xs font-medium text-slate-600 dark:text-slate-400">Sipariş No</label><input id="f-orderNo" class="w-full mt-1 px-3 py-2 text-sm border border-slate-300 dark:border-slate-600 rounded-lg dark:bg-slate-700 font-bold focus:ring-2 outline-none" value="${o.orderNo || ''}"></div><div><label class="text-xs font-medium text-slate-600 dark:text-slate-400">Müşteri</label><input id="f-customer" class="w-full mt-1 px-3 py-2 text-sm border border-slate-300 dark:border-slate-600 rounded-lg dark:bg-slate-700 focus:ring-2 outline-none" value="${o.customer || ''}"></div><div><label class="text-xs font-medium text-slate-600 dark:text-slate-400">Ürün (Reçeteli ve Rotalı)</label><select id="f-product" class="w-full mt-1 px-3 py-2 text-sm border border-slate-300 dark:border-slate-600 rounded-lg dark:bg-slate-700 focus:ring-2 outline-none"><option value="">Seçiniz...</option>${productOptions}</select></div><div><label class="text-xs font-medium text-slate-600 dark:text-slate-400">Miktar</label><input id="f-quantity" type="number" class="w-full mt-1 px-3 py-2 text-sm border border-slate-300 dark:border-slate-600 rounded-lg dark:bg-slate-700 font-bold text-center focus:ring-2 outline-none" value="${o.quantity || ''}"></div><div class="grid grid-cols-2 gap-3"><div><label class="text-xs font-medium text-slate-600 dark:text-slate-400">Sipariş Tarihi</label><input id="f-orderDate" type="date" class="w-full mt-1 px-3 py-2 text-sm border border-slate-300 dark:border-slate-600 rounded-lg dark:bg-slate-700" value="${o.orderDate || new Date().toISOString().slice(0,10)}"></div><div><label class="text-xs font-medium text-slate-600 dark:text-slate-400">Teslim Tarihi</label><input id="f-dueDate" type="date" class="w-full mt-1 px-3 py-2 text-sm border border-slate-300 dark:border-slate-600 rounded-lg dark:bg-slate-700" value="${o.dueDate || ''}"></div></div><div><label class="text-xs font-medium text-slate-600 dark:text-slate-400">Durum</label><select id="f-status" class="w-full mt-1 px-3 py-2 text-sm border border-slate-300 dark:border-slate-600 rounded-lg dark:bg-slate-700"><option value="new" ${o.status==='new'?'selected':''}>Yeni</option><option value="planning" ${o.status==='planning'?'selected':''}>Planlama</option><option value="production" ${o.status==='production'?'selected':''}>Üretimde</option><option value="ready_to_ship" ${o.status==='ready_to_ship'?'selected':''}>Sevkiyata Hazır</option><option value="shipped" ${o.status==='shipped'?'selected':''}>Sevk Edildi</option></select></div><div class="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700 flex items-start gap-2"><input type="checkbox" id="f-autoPlan" class="mt-0.5 w-4 h-4 text-primary-600 rounded" checked><label for="f-autoPlan" class="text-xs font-medium text-slate-600 dark:text-slate-400">Siparişi onaylayıp iş emri oluştur ve sıraya al.</label></div></div>`;
+}
+
+function createOrder() { 
+  showModal('Yeni Sipariş', orderFormHtml(), () => { 
+    const orders = DB.get('customer_orders'); const autoPlan = document.getElementById('f-autoPlan').checked; const newId = DB.nextId('customer_orders'); 
+    orders.push({ id: newId, orderNo: document.getElementById('f-orderNo').value, customer: document.getElementById('f-customer').value, product: document.getElementById('f-product').value, quantity: parseInt(document.getElementById('f-quantity').value) || 0, orderDate: document.getElementById('f-orderDate').value, dueDate: document.getElementById('f-dueDate').value, status: document.getElementById('f-status').value, workOrderId: null }); 
+    DB.set('customer_orders', orders); 
+    closeModal(); 
+    if (autoPlan) setTimeout(() => planOrder(newId), 300); 
+    else { toast('Sipariş oluşturuldu'); render(); }
+  }); 
+}
+
+function editOrder(id) { const orders = DB.get('customer_orders'); const o = orders.find(x => x.id === id); if (!o) return; showModal('Sipariş Düzenle', orderFormHtml(o), () => { o.orderNo = document.getElementById('f-orderNo').value; o.customer = document.getElementById('f-customer').value; o.product = document.getElementById('f-product').value; o.quantity = parseInt(document.getElementById('f-quantity').value) || 0; o.orderDate = document.getElementById('f-orderDate').value; o.dueDate = document.getElementById('f-dueDate').value; o.status = document.getElementById('f-status').value; DB.set('customer_orders', orders); closeModal(); toast('Sipariş güncellendi'); render(); }); }
+function deleteOrder(id) { confirmDialog('Siparişi silmek?', () => { DB.set('customer_orders', DB.get('customer_orders').filter(o => o.id !== id)); toast('Sipariş silindi', 'info'); render(); }); }
+
+function planOrder(id) {
+  const orders = DB.get('customer_orders'); const o = orders.find(x => x.id === id); if (!o) return;
+  const routes = DB.get('product_routes'); 
+  const route = routes.find(r => r.productName === o.product && !r.isTemplate) || routes.find(r => r.productName === o.product);
+  
+  const wos = DB.get('work_orders'); const woId = DB.nextId('work_orders'); const woNo = `WO-2026-${String(woId).padStart(3,'0')}`;
+  wos.push({ id: woId, orderNo: woNo, customerOrderId: o.id, customer: o.customer, product: o.product, quantity: o.quantity, priority: 'normal', status: 'pending', dueDate: o.dueDate, createdAt: new Date().toISOString().slice(0,10), queueIndex: wos.length }); 
+  DB.set('work_orders', wos);
+  
+  if (route && route.steps.length > 0) {
+    const allSteps = DB.get('work_order_steps'); 
+    route.steps.forEach((tpl, idx) => { 
+        const stepId = allSteps.length > 0 ? Math.max(...allSteps.map(s=>s.id)) + 1 : 1; 
+        allSteps.push({ 
+            id: stepId, workOrderId: woId, stationId: tpl.stationId, stepOrder: tpl.stepOrder || (idx + 1), 
+            estimatedMinutes: tpl.estimatedMinutes, setupMinutes: tpl.setupMinutes || 0, 
+            plannedStart: null, plannedEnd: null, actualStart: null, actualEnd: null, status: 'pending' 
+        }); 
+    });
+    DB.set('work_order_steps', allSteps); 
+    recalculateSchedules(); 
+    toast(`İş emri oluşturuldu ve üretim sırasına yerleştirildi`, 'success');
+  } else toast(`Rota bulunamadı`, 'warning');
+  
+  o.status = 'planning'; o.workOrderId = woId; DB.set('customer_orders', orders); navigateTo('work-orders');
+}
+
+// ============ PAGE: WORK ORDERS (DRAG & DROP) ============
+let draggedWOId = null;
+
+function dragWO(ev, id) { draggedWOId = id; ev.dataTransfer.effectAllowed = "move"; ev.target.style.opacity = "0.5"; }
+function allowDropWO(ev) { ev.preventDefault(); const row = ev.target.closest('tr'); if(row && row.draggable) { row.classList.add('drag-over'); } }
+function leaveDropWO(ev) { const row = ev.target.closest('tr'); if(row) { row.classList.remove('drag-over'); } }
+function dropWO(ev, targetId) {
+    ev.preventDefault(); const row = ev.target.closest('tr'); if(row) row.classList.remove('drag-over');
+    if (draggedWOId === targetId) return;
+    
+    let wos = DB.get('work_orders');
+    wos.forEach((w,i) => { if(w.queueIndex === undefined) w.queueIndex = i; });
+    wos = wos.sort((a,b) => a.queueIndex - b.queueIndex);
+    
+    const draggedIdx = wos.findIndex(w => w.id === draggedWOId);
+    const targetIdx = wos.findIndex(w => w.id === targetId);
+    
+    if(draggedIdx > -1 && targetIdx > -1) {
+        const [draggedItem] = wos.splice(draggedIdx, 1);
+        wos.splice(targetIdx, 0, draggedItem);
+        wos.forEach((w, i) => w.queueIndex = i);
+        DB.set('work_orders', wos);
+        
+        recalculateSchedules(); 
+        toast('Üretim öncelik sırası değiştirildi ve Gantt planı güncellendi!', 'success');
+        render();
+    }
+}
+
+function startStep(stepId) {
+  const steps = DB.get('work_order_steps'); const s = steps.find(x => x.id === stepId);
+  s.status = 'in_progress'; s.actualStart = new Date().toISOString(); 
+  const wos = DB.get('work_orders'); const wo = wos.find(w => w.id === s.workOrderId);
+  wo.status = 'in_progress'; DB.set('work_orders', wos); DB.set('work_order_steps', steps);
+  if(wo.customerOrderId) { const orders = DB.get('customer_orders'); const o = orders.find(x => x.id === wo.customerOrderId); if(o && o.status !== 'production') { o.status = 'production'; DB.set('customer_orders', orders); } }
+  toast('Adım başlatıldı'); render();
+}
+
+function completeStep(stepId) {
+  const steps = DB.get('work_order_steps'); const s = steps.find(x => x.id === stepId);
+  s.status = 'completed'; s.actualEnd = new Date().toISOString(); DB.set('work_order_steps', steps);
+  const wos = DB.get('work_orders'); const wo = wos.find(w => w.id === s.workOrderId);
+  if (steps.filter(x => x.workOrderId === wo.id).every(x => x.status === 'completed')) { 
+     wo.status = 'completed'; DB.set('work_orders', wos); 
+     if(wo.customerOrderId) { const orders = DB.get('customer_orders'); const o = orders.find(x => x.id === wo.customerOrderId); if(o) { o.status = 'ready_to_ship'; DB.set('customer_orders', orders); } }
+  }
+  recalculateSchedules();
+  toast('Adım tamamlandı, planlar güncellendi'); render();
+}
+
+function renderWorkOrders() {
+  let wos = DB.get('work_orders'); 
+  wos.forEach((w,i) => { if(w.queueIndex === undefined) w.queueIndex = i; });
+  wos = wos.sort((a,b) => a.queueIndex - b.queueIndex);
+  
+  const steps = DB.get('work_order_steps'); const stations = DB.get('stations'); const logs = DB.get('production_logs');
+  
+  const rows = wos.map((wo, index) => {
+    const woSteps = steps.filter(s => s.workOrderId === wo.id).sort((a,b) => a.stepOrder - b.stepOrder); const isExpanded = expandedWorkOrders.has(wo.id);
+    let expandedHtml = '';
+    if (isExpanded) {
+      const stepsHtml = woSteps.map((s) => {
+        const st = stations.find(x => x.id === s.stationId); const stepLogs = logs.filter(l => l.stepId === s.id); const totalProduced = stepLogs.reduce((sum, l) => sum + l.quantity, 0); const isComplete = s.status === 'completed'; const progressPct = wo.quantity > 0 ? Math.min(100, Math.round((totalProduced / wo.quantity) * 100)) : 0;
+        return `<div class="flex items-center gap-4 py-3 px-4 border-t border-slate-100 dark:border-slate-700 text-sm"><span class="w-6 h-6 rounded-full bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 flex items-center justify-center font-bold text-[10px] flex-shrink-0">${s.stepOrder}</span><span class="w-32 font-medium">${st ? st.name : '?'}</span><div class="flex-1 max-w-[200px]"><div class="flex justify-between text-[10px] mb-1 text-slate-500"><span>İlerleme</span><span class="font-bold text-slate-700 dark:text-slate-300">${totalProduced} / ${wo.quantity}</span></div><div class="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-1.5"><div class="${isComplete ? 'bg-green-500' : 'bg-primary-500'} h-1.5 rounded-full" style="width:${progressPct}%"></div></div></div><span class="w-40 text-[10px] text-center font-mono opacity-80">${formatDateTime(s.plannedStart)} <br> ${formatDateTime(s.plannedEnd)}</span><span class="px-2 py-0.5 rounded-full text-[10px] font-medium ${statusColor(s.status)}">${statusLabel(s.status)}</span><div class="flex gap-2 ml-auto">${s.status === 'pending' ? `<button onclick="startStep(${s.id})" class="px-3 py-1 rounded bg-green-500 text-white text-[10px] font-bold">Başlat</button>` : ''}${s.status === 'in_progress' ? `<button onclick="completeStep(${s.id})" class="px-3 py-1 rounded bg-slate-800 dark:bg-slate-700 text-white text-[10px] font-bold">İşi Kapat</button>` : ''}<button onclick="deleteStep(${s.id})" class="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded"><i data-lucide="trash" class="w-3.5 h-3.5"></i></button></div></div>`;
+      }).join('');
+      expandedHtml = `<tr><td colspan="8" class="p-0"><div class="bg-slate-50 dark:bg-slate-900/50 px-6 py-4 border-t border-slate-200 dark:border-slate-700 shadow-inner">${stepsHtml}</div></td></tr>`;
+    }
+    return `<tr draggable="true" ondragstart="dragWO(event, ${wo.id})" ondragover="allowDropWO(event)" ondragleave="leaveDropWO(event)" ondrop="dropWO(event, ${wo.id})" ondragend="this.style.opacity='1'" class="border-b border-slate-100 dark:border-slate-700/50 hover:bg-slate-50 dark:hover:bg-slate-800/50 text-sm cursor-move transition-colors" title="Sırasını değiştirmek için sürükleyin"><td class="py-3 px-4"><div class="flex items-center gap-2"><i data-lucide="grip-vertical" class="w-4 h-4 text-slate-400"></i> <i data-lucide="${isExpanded ? 'chevron-down' : 'chevron-right'}" class="w-4 h-4 text-primary-500 cursor-pointer" onclick="toggleWO(${wo.id})"></i></div></td><td class="py-3 px-4 font-mono font-bold text-primary-600"><div class="text-[9px] text-slate-400 uppercase tracking-widest mb-0.5">Kuyruk: ${index+1}</div>${wo.orderNo}</td><td class="py-3 px-4 font-medium">${wo.product}</td><td class="py-3 px-4 text-right font-black">${wo.quantity}</td><td class="py-3 px-4"><span class="px-2 py-0.5 rounded-full text-xs font-medium ${statusColor(wo.status)}">${statusLabel(wo.status)}</span></td><td class="py-3 px-4 text-xs font-medium">${formatDate(wo.dueDate)}</td><td class="py-3 px-4 text-center text-xs font-medium">${woSteps.length} Adım</td><td class="py-3 px-4" onclick="event.stopPropagation()"><button onclick="deleteWorkOrder(${wo.id})" class="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg"><i data-lucide="trash-2" class="w-4 h-4"></i></button></td></tr>${expandedHtml}`;
+  }).join('');
+  
+  return `<div class="max-w-7xl mx-auto space-y-4"><div class="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800/50 rounded-xl p-3 flex items-center gap-3 text-sm text-blue-800 dark:text-blue-300"><i data-lucide="info" class="w-5 h-5 text-blue-600"></i> <span>Aşağıdaki listeden iş emirlerini <b>tutup sürükleyerek</b> üretim önceliğini değiştirebilirsiniz. Sistem yeni sıraya göre İstasyon planlarını (Gantt) otomatik güncelleyecektir.</span></div><div class="flex justify-between items-end"><div><h2 class="text-lg font-bold">İş Emirleri & Üretim Sırası</h2></div><button onclick="createWorkOrder()" class="flex items-center gap-1 px-4 py-2 bg-primary-600 text-white rounded-lg text-sm font-bold shadow hover:bg-primary-700 transition-colors"><i data-lucide="plus" class="w-4 h-4"></i> Yeni İş Emri</button></div><div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-x-auto"><table class="w-full text-left"><thead><tr class="border-b border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-500 uppercase tracking-wider bg-slate-50 dark:bg-slate-900"><th class="py-3 px-4 w-12 text-center">Sırala</th><th class="py-3 px-4">İş Emri</th><th class="py-3 px-4">Ürün</th><th class="py-3 px-4 text-right">Miktar</th><th class="py-3 px-4">Durum</th><th class="py-3 px-4">Teslim</th><th class="py-3 px-4 text-center">Rota</th><th class="py-3 px-4">İşlem</th></tr></thead><tbody>${rows || `<tr><td colspan="8" class="text-center py-6 text-sm text-slate-500">Kayıt bulunamadı.</td></tr>`}</tbody></table></div></div>`;
+}
+
+function toggleWO(id) { expandedWorkOrders.has(id) ? expandedWorkOrders.delete(id) : expandedWorkOrders.add(id); render(); }
+function woOrderChanged(orderId) { if (!orderId) return; const o = DB.get('customer_orders').find(x => x.id == orderId); if (o) { document.getElementById('f-woCustomer').value = o.customer || ''; document.getElementById('f-woProduct').value = o.product || ''; document.getElementById('f-woQty').value = o.quantity || ''; } }
+function workOrderFormHtml(wo = {}) {
+  const orders = DB.get('customer_orders'); const orderOpts = orders.map(o => `<option value="${o.id}" ${wo.customerOrderId===o.id?'selected':''}>${o.orderNo} - ${o.customer}</option>`).join('');
+  const boms = DB.get('product_bom'); const productOpts = boms.map(b => `<option value="${b.productName}" ${wo.product === b.productName ? 'selected' : ''}>${b.productName}</option>`).join('');
+  return `<div class="space-y-3"><div><label class="text-xs font-medium text-slate-600 dark:text-slate-400">İş Emri No</label><input id="f-woNo" class="w-full mt-1 px-3 py-2 text-sm border border-slate-300 dark:border-slate-600 dark:bg-slate-700 rounded-lg font-bold text-primary-600 focus:ring-2 outline-none" value="${wo.orderNo || `WO-2026-${Math.floor(Math.random()*1000)}`}"></div><div><label class="text-xs font-medium text-slate-600 dark:text-slate-400">Müşteri Siparişi</label><select id="f-woOrder" onchange="woOrderChanged(this.value)" class="w-full mt-1 px-3 py-2 text-sm border border-slate-300 dark:border-slate-600 dark:bg-slate-700 rounded-lg focus:ring-2 outline-none"><option value="">Seçiniz</option>${orderOpts}</select></div><div><label class="text-xs font-medium text-slate-600 dark:text-slate-400">Müşteri</label><input id="f-woCustomer" class="w-full mt-1 px-3 py-2 text-sm border border-slate-300 dark:border-slate-600 dark:bg-slate-700 rounded-lg focus:ring-2 outline-none" value="${wo.customer || ''}"></div><div><label class="text-xs font-medium text-slate-600 dark:text-slate-400">Ürün (Reçeteli)</label><select id="f-woProduct" class="w-full mt-1 px-3 py-2 text-sm border border-slate-300 dark:border-slate-600 dark:bg-slate-700 rounded-lg font-bold focus:ring-2 outline-none"><option value="">Seçiniz...</option>${productOpts}</select></div><div><label class="text-xs font-medium text-slate-600 dark:text-slate-400">Miktar</label><input id="f-woQty" type="number" class="w-full mt-1 px-3 py-2 text-sm border border-slate-300 dark:border-slate-600 dark:bg-slate-700 rounded-lg font-bold text-center focus:ring-2 outline-none" value="${wo.quantity || ''}"></div></div>`;
+}
+
+function createWorkOrder() {
+  showModal('Yeni İş Emri Oluştur', workOrderFormHtml(), () => {
+    const wos = DB.get('work_orders'); const productName = document.getElementById('f-woProduct').value; const qty = parseInt(document.getElementById('f-woQty').value) || 0;
+    if(!productName || qty <= 0) return toast('Ürün ve miktar giriniz', 'error');
+    
+    const woId = DB.nextId('work_orders'); 
+    wos.push({ id: woId, orderNo: document.getElementById('f-woNo').value, customerOrderId: parseInt(document.getElementById('f-woOrder').value) || null, customer: document.getElementById('f-woCustomer').value, product: productName, quantity: qty, status: 'pending', createdAt: new Date().toISOString().slice(0,10), queueIndex: wos.length }); 
+    DB.set('work_orders', wos);
+    
+    const routes = DB.get('product_routes'); const route = routes.find(r => r.productName === productName && !r.isTemplate) || routes.find(r => r.productName === productName);
+    if (route && route.steps.length > 0) {
+      const allSteps = DB.get('work_order_steps'); 
+      route.steps.forEach((tpl, idx) => { 
+          const stepId = allSteps.length > 0 ? Math.max(...allSteps.map(s=>s.id)) + 1 : 1; 
+          allSteps.push({ id: stepId, workOrderId: woId, stationId: tpl.stationId, stepOrder: tpl.stepOrder || (idx + 1), estimatedMinutes: tpl.estimatedMinutes, setupMinutes: tpl.setupMinutes || 0, plannedStart: null, plannedEnd: null, status: 'pending' }); 
+      });
+      DB.set('work_order_steps', allSteps); 
+      recalculateSchedules(); 
+      toast('İş emri oluşturuldu ve planlandı');
+    } 
+    expandedWorkOrders.add(woId); closeModal(); render();
+  });
+}
+
+function deleteWorkOrder(id) { confirmDialog('Silmek istediğinize emin misiniz?', () => { DB.set('work_orders', DB.get('work_orders').filter(w => w.id !== id)); DB.set('work_order_steps', DB.get('work_order_steps').filter(s => s.workOrderId !== id)); recalculateSchedules(); toast('Silindi', 'info'); render(); }); }
+function deleteStep(stepId) { confirmDialog('Adımı silmek?', () => { DB.set('work_order_steps', DB.get('work_order_steps').filter(s => s.id !== stepId)); recalculateSchedules(); toast('Adım silindi', 'info'); render(); }); }
+
+// ============ INVENTORY / BOM ============
+function renderInventory() {
+  const materials = DB.get('materials'); const boms = DB.get('product_bom');
+  const matRows = materials.map(m => `<tr class="border-b border-slate-100 text-sm hover:bg-slate-50 dark:hover:bg-slate-800"><td class="py-2 px-3 font-mono text-primary-600">${m.code}</td><td class="py-2 px-3 font-medium">${m.name}</td><td class="py-2 px-3">${m.unit}</td><td class="py-2 px-3 text-right font-bold ${m.stock < 10 ? 'text-red-500' : 'text-slate-700 dark:text-slate-300'}">${m.stock}</td><td class="py-2 px-3 text-right"><button onclick="editMaterial(${m.id})" class="p-1 text-slate-500 hover:bg-slate-200 rounded"><i data-lucide="pencil" class="w-3.5 h-3.5"></i></button><button onclick="deleteMaterial(${m.id})" class="p-1 text-red-500 hover:bg-red-50 rounded"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button></td></tr>`).join('');
+  const bomCards = boms.map((b, bIndex) => {
+    const items = b.materials.map(bm => { 
+        const mat = materials.find(m => m.id === bm.materialId); 
+        const stepLbl = bm.stepOrder ? `<span class="bg-indigo-50 text-indigo-600 px-1.5 rounded text-[9px] font-bold border border-indigo-100">Sıra ${bm.stepOrder}'da Çekilecek</span>` : `<span class="bg-slate-100 text-slate-500 px-1.5 rounded text-[9px] font-bold">Aşama Seçilmedi</span>`;
+        return `<div class="flex justify-between items-center text-xs py-1.5 border-b border-slate-50 dark:border-slate-700/50 last:border-0"><div class="flex flex-col"><span class="text-slate-600 dark:text-slate-300 font-medium">${mat ? mat.name : '?'}</span>${stepLbl}</div><span class="font-bold bg-slate-100 dark:bg-slate-700 px-2 py-0.5 rounded text-primary-700 dark:text-primary-300">${bm.qtyPerUnit} ${mat ? mat.unit : ''}</span></div>`; 
+    }).join('');
+    return `<div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-5 shadow-sm"><div class="flex justify-between items-start mb-3"><div><h4 class="font-bold text-sm text-primary-700 dark:text-primary-400 flex items-center gap-2"><i data-lucide="box" class="w-4 h-4"></i> ${b.productName}</h4><div class="text-[10px] text-slate-500 mt-1 font-medium bg-slate-50 dark:bg-slate-900 px-2 py-0.5 rounded border border-slate-100 dark:border-slate-700 inline-block">Bağlı Rota Şablonu: ${b.baseRouteName || 'Yok'}</div></div><div class="flex gap-1"><button onclick="editBOM(${bIndex})" class="p-1.5 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg"><i data-lucide="pencil" class="w-3.5 h-3.5"></i></button><button onclick="deleteBOM(${bIndex})" class="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button></div></div>${items}</div>`;
+  }).join('');
+
+  return `<div class="max-w-7xl mx-auto space-y-6"><div class="grid grid-cols-1 lg:grid-cols-2 gap-6"><div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden self-start shadow-sm"><div class="px-5 py-4 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50 flex justify-between items-center"><h3 class="font-bold text-sm flex items-center gap-2"><i data-lucide="layers" class="w-4 h-4 text-primary-500"></i> Depo Stok Durumu</h3><button onclick="showMaterialModal()" class="px-3 py-1.5 bg-primary-600 text-white rounded-lg text-xs font-medium hover:bg-primary-700 shadow-sm flex items-center gap-1"><i data-lucide="plus" class="w-3 h-3"></i> Yeni Malzeme</button></div><table class="w-full text-left"><thead><tr class="text-xs font-semibold text-slate-500 border-b border-slate-200 dark:border-slate-700 uppercase bg-slate-50 dark:bg-slate-900/50"><th class="py-3 px-4">Kod</th><th class="py-3 px-4">Malzeme</th><th class="py-3 px-4">Birim</th><th class="py-3 px-4 text-right">Mevcut</th><th class="py-3 px-4 text-right">İşlem</th></tr></thead><tbody>${matRows || '<tr><td colspan="5" class="text-center py-6 text-sm text-slate-500">Kayıtlı malzeme bulunamadı.</td></tr>'}</tbody></table></div><div><div class="flex justify-between items-center mb-4"><h3 class="font-bold text-sm flex items-center gap-2"><i data-lucide="file-json" class="w-4 h-4 text-primary-500"></i> Ürün Reçeteleri (BOM)</h3><button onclick="showBOMModal()" class="px-3 py-1.5 bg-primary-600 text-white rounded-lg text-xs font-medium hover:bg-primary-700 shadow-sm flex items-center gap-1"><i data-lucide="plus" class="w-3 h-3"></i> Yeni Reçete</button></div><div class="space-y-4">${bomCards || '<div class="text-sm text-slate-500 text-center py-8 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm">Kayıtlı reçete bulunamadı.</div>'}</div></div></div></div>`;
+}
+
+function showMaterialModal(id = null) {
+   const materials = DB.get('materials'); const m = materials.find(x => x.id === id) || {};
+   showModal(id ? 'Malzeme Düzenle' : 'Yeni Malzeme Ekle', `<div class="space-y-3"><div><label class="text-xs font-medium text-slate-600 dark:text-slate-400">Malzeme Kodu</label><input id="f-matCode" class="w-full mt-1 px-3 py-2 text-sm border border-slate-300 dark:border-slate-600 rounded-lg dark:bg-slate-800 focus:ring-2 outline-none" value="${m.code || ''}"></div><div><label class="text-xs font-medium text-slate-600 dark:text-slate-400">Malzeme Adı</label><input id="f-matName" class="w-full mt-1 px-3 py-2 text-sm border border-slate-300 dark:border-slate-600 rounded-lg dark:bg-slate-800 focus:ring-2 outline-none" value="${m.name || ''}"></div><div><label class="text-xs font-medium text-slate-600 dark:text-slate-400">Birim</label><select id="f-matUnit" class="w-full mt-1 px-3 py-2 text-sm border border-slate-300 dark:border-slate-600 rounded-lg dark:bg-slate-800 focus:ring-2 outline-none"><option value="adet" ${m.unit==='adet'?'selected':''}>Adet</option><option value="mm" ${m.unit==='mm'?'selected':''}>Milimetre (mm)</option><option value="kg" ${m.unit==='kg'?'selected':''}>Kilogram (kg)</option><option value="set" ${m.unit==='set'?'selected':''}>Set</option></select></div><div><label class="text-xs font-medium text-slate-600 dark:text-slate-400">Mevcut Stok</label><input id="f-matStock" type="number" class="w-full mt-1 px-3 py-2 text-sm border border-slate-300 dark:border-slate-600 rounded-lg dark:bg-slate-800 focus:ring-2 outline-none" value="${m.stock || 0}"></div></div>`, () => {
+      m.code = document.getElementById('f-matCode').value; m.name = document.getElementById('f-matName').value; m.unit = document.getElementById('f-matUnit').value; m.stock = parseInt(document.getElementById('f-matStock').value) || 0;
+      if(!id) { m.id = DB.nextId('materials'); materials.push(m); } DB.set('materials', materials); closeModal(); render(); toast('Malzeme kaydedildi');
+   });
+}
+function editMaterial(id) { showMaterialModal(id); }
+function deleteMaterial(id) { confirmDialog('Malzemeyi silmek istediğinize emin misiniz?', () => { DB.set('materials', DB.get('materials').filter(m => m.id !== id)); render(); toast('Malzeme silindi', 'info'); }); }
+
+let tempBOMRouteSteps = [];
+window.getStationName = function(id) { const st = DB.get('stations').find(s => s.id == id); return st ? st.name : 'Bilinmeyen İstasyon'; }
+window.bomRouteChanged = function(routeName) { const routes = DB.get('product_routes'); const route = routes.find(r => r.productName === routeName && r.isTemplate); tempBOMRouteSteps = route ? route.steps : []; if(window.renderTempBOMItems) window.renderTempBOMItems(); }
+window.bomItemRow = function(materials, routeSteps = [], selectedMatId = '', qty = 1, selectedStepOrder = '') {
+   const matOpts = materials.map(m => `<option value="${m.id}" ${m.id == selectedMatId ? 'selected' : ''}>${m.name} (${m.unit})</option>`).join('');
+   const stepOpts = routeSteps.map(s => `<option value="${s.stepOrder}" ${s.stepOrder == selectedStepOrder ? 'selected' : ''}>Sıra ${s.stepOrder} - ${window.getStationName(s.stationId)}</option>`).join('');
+   return `<div class="flex items-center gap-2 mt-2 bom-item-row p-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg"><select class="bom-mat-select flex-1 px-2 py-1.5 text-xs border border-slate-300 dark:border-slate-600 rounded-md dark:bg-slate-700 font-medium outline-none focus:ring-1"><option value="">Malzeme Seç...</option>${matOpts}</select><input type="number" class="bom-mat-qty w-20 px-2 py-1.5 text-xs border border-slate-300 dark:border-slate-600 rounded-md dark:bg-slate-700 text-center font-bold outline-none focus:ring-1" placeholder="Miktar" value="${qty}" step="0.1" min="0.1"><select class="bom-step-select flex-1 px-2 py-1.5 text-[10px] border border-indigo-200 dark:border-indigo-800/50 rounded-md bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 font-bold uppercase tracking-tight outline-none focus:ring-1"><option value="">-- Depodan Ne Zaman Çekilecek? --</option>${stepOpts}</select><button onclick="this.parentElement.remove()" class="text-red-500 p-1.5 hover:bg-red-50 dark:hover:bg-red-900/30 rounded"><i data-lucide="x" class="w-4 h-4"></i></button></div>`;
+}
+
+function showBOMModal(index = null) {
+   const boms = DB.get('product_bom'); const materials = DB.get('materials'); const routes = DB.get('product_routes').filter(r => r.isTemplate); 
+   if (routes.length === 0) return toast('Önce "Ürün Rotaları" sekmesinden bir rota şablonu oluşturun!', 'warning');
+   const b = index !== null ? boms[index] : { productName: '', baseRouteName: '', materials: [] };
+   const baseRoute = routes.find(r => r.productName === b.baseRouteName); tempBOMRouteSteps = baseRoute ? baseRoute.steps : [];
+   const routeOpts = routes.map(r => `<option value="${r.productName}" ${r.productName === b.baseRouteName ? 'selected' : ''}>${r.productName}</option>`).join('');
+
+   window.renderTempBOMItems = function() {
+       let itemsHtml = b.materials.map(m => window.bomItemRow(materials, tempBOMRouteSteps, m.materialId, m.qtyPerUnit, m.stepOrder)).join('');
+       if(!itemsHtml) itemsHtml = window.bomItemRow(materials, tempBOMRouteSteps);
+       document.getElementById('bom-items').innerHTML = itemsHtml; lucide.createIcons();
+   };
+
+   showModal(index !== null ? 'Reçete ve Dağıtım Düzenle' : 'Yeni Reçete (BOM) & Rota Dağıtımı', `<div class="space-y-4"><div><label class="text-xs font-medium text-slate-600 dark:text-slate-400">Ürün Adı</label><input id="f-bomProduct" class="w-full mt-1 px-3 py-2 text-sm border border-slate-300 dark:border-slate-600 rounded-lg dark:bg-slate-700 font-bold focus:ring-2 outline-none" placeholder="Örn: Polis İHA" value="${b.productName}"></div><div><label class="text-xs font-medium text-slate-600 dark:text-slate-400">Bu Ürün Hangi Rotayı (Şablonu) Kullanacak?</label><select id="f-bomRoute" onchange="window.bomRouteChanged(this.value)" class="w-full mt-1 px-3 py-2 text-sm border border-blue-200 dark:border-blue-800/50 rounded-lg bg-blue-50 text-blue-800 font-bold dark:bg-blue-900/30 dark:text-blue-300 focus:ring-2 outline-none"><option value="">-- Rota Şablonu Seçiniz --</option>${routeOpts}</select></div><div class="pt-2 border-t border-slate-200 dark:border-slate-700"><div class="flex justify-between items-center mb-2"><label class="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase">Malzemeler ve İstasyon Dağıtımı</label><button onclick="document.getElementById('bom-items').insertAdjacentHTML('beforeend', window.bomItemRow(DB.get('materials'), tempBOMRouteSteps)); lucide.createIcons();" class="text-xs text-primary-600 hover:text-primary-700 font-bold flex items-center gap-1 bg-primary-50 dark:bg-primary-900/20 px-2 py-1 rounded border border-primary-200 dark:border-primary-800"><i data-lucide="plus" class="w-3 h-3"></i> Malzeme Ekle</button></div><p class="text-[10px] text-slate-400 mb-3 italic">Not: Bir malzemeyi hangi aşamada seçerseniz, terminaldeki operatör o aşamaya gelene kadar o malzeme depodan istenmez.</p><div id="bom-items" class="p-2 bg-slate-50 dark:bg-slate-900/50 rounded-lg border border-slate-200 dark:border-slate-700 min-h-[100px] max-h-[35vh] overflow-y-auto custom-scrollbar"></div></div></div>`, () => {
+      const pname = document.getElementById('f-bomProduct').value.trim(); const rname = document.getElementById('f-bomRoute').value;
+      if(!pname) return toast('Ürün adı yazın', 'error'); if(!rname) return toast('Rota şablonu seçin', 'error'); 
+      const newMats = [];
+      document.querySelectorAll('.bom-item-row').forEach(r => { const mId = parseInt(r.querySelector('.bom-mat-select').value); const qty = parseFloat(r.querySelector('.bom-mat-qty').value); const sOrd = parseInt(r.querySelector('.bom-step-select').value) || null; if(mId && qty > 0) newMats.push({ materialId: mId, qtyPerUnit: qty, stepOrder: sOrd }); });
+      if(newMats.length === 0) return toast('En az 1 malzeme ekleyin', 'error');
+      
+      const newBOM = { productId: b.productId || DB.nextId('product_bom'), productName: pname, baseRouteName: rname, materials: newMats };
+      if(index !== null) boms[index] = newBOM; else boms.push(newBOM);
+      DB.set('product_bom', boms); 
+      
+      const baseRoute = DB.get('product_routes').find(r => r.productName === rname && r.isTemplate);
+      if (baseRoute) {
+          const specificRoute = { id: DB.nextId('product_routes') + 1000, productName: pname, baseRouteName: rname, isTemplate: false, steps: JSON.parse(JSON.stringify(baseRoute.steps)) };
+          const minStep = Math.min(...specificRoute.steps.map(s => parseInt(s.stepOrder) || 1));
+          specificRoute.steps.forEach(s => { s.materials = newMats.filter(m => m.stepOrder === s.stepOrder || (!m.stepOrder && s.stepOrder === minStep)).map(m => ({ materialId: m.materialId, qtyPerUnit: m.qtyPerUnit })); });
+          const allRoutes = DB.get('product_routes'); const existingIdx = allRoutes.findIndex(r => r.productName === pname && !r.isTemplate);
+          if (existingIdx >= 0) allRoutes[existingIdx] = specificRoute; else allRoutes.push(specificRoute);
+          DB.set('product_routes', allRoutes);
+      }
+      closeModal(); render(); toast('Reçete ve Rota Dağıtımı başarıyla kaydedildi!');
+   });
+   window.renderTempBOMItems();
+}
+function editBOM(index) { showBOMModal(index); }
+function deleteBOM(index) { confirmDialog('Reçeteyi silmek istediğinize emin misiniz?', () => { const boms = DB.get('product_bom'); const pname = boms[index].productName; boms.splice(index, 1); DB.set('product_bom', boms); const routes = DB.get('product_routes').filter(r => !(r.productName === pname && !r.isTemplate)); DB.set('product_routes', routes); render(); toast('Reçete silindi', 'info'); }); }
+
+// ============ PAGE: PRODUCT ROUTES ============
+let tempRouteState = { productName: '', steps: [] };
+
+function renderProductRoutes() {
+  const routes = DB.get('product_routes').filter(r => r.isTemplate); const stations = DB.get('stations');
+  return `<div class="max-w-7xl mx-auto space-y-4"><div class="flex items-center justify-between mb-2"><div><h2 class="text-sm text-slate-500">Operasyonları (Seri/Paralel) ve Süreleri Tanımlayın</h2></div><button onclick="showAddRouteModal()" class="flex items-center gap-2 bg-primary-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary-700 shadow transition-colors"><i data-lucide="plus" class="w-4 h-4"></i> Yeni Rota Şablonu</button></div>
+    ${routes.length === 0 ? `<div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-16 text-center shadow-sm"><i data-lucide="route" class="w-12 h-12 text-slate-300 dark:text-slate-600 mx-auto mb-4"></i><p class="text-sm text-slate-500">Henüz rota şablonu tanımlanmadı</p></div>` : `
+      <div class="grid grid-cols-1 gap-4">
+        ${routes.map(route => {
+          const totalMin = route.steps.reduce((s,st) => s + (st.estimatedMinutes||0) + (st.setupMinutes||0), 0);
+          return `<div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden shadow-sm"><div class="flex items-center justify-between p-4 border-b border-slate-100 dark:border-slate-700"><div class="flex items-center gap-3"><div class="w-10 h-10 rounded-lg bg-indigo-50 dark:bg-indigo-900/30 flex items-center justify-center"><i data-lucide="route" class="w-5 h-5 text-indigo-600 dark:text-indigo-400"></i></div><div><div class="flex items-center gap-2"><h3 class="font-bold text-sm text-slate-800 dark:text-slate-200">${route.productName}</h3><span class="bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800 px-2 py-0.5 rounded text-[10px] font-bold">Rota Şablonu</span></div><span class="text-xs text-slate-500">${route.steps.length} adım · ${(totalMin / 60).toFixed(1)} saat (1 Birim)</span></div></div><div class="flex items-center gap-2"><button onclick="editRoute(${route.id})" class="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-500"><i data-lucide="pencil" class="w-3.5 h-3.5"></i></button><button onclick="deleteRoute(${route.id})" class="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/30 text-red-500"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button></div></div>
+              <div class="p-4 bg-slate-50/50 dark:bg-slate-900/30"><div class="flex items-center gap-2 flex-wrap">
+                  ${route.steps.map((step, i) => {
+                    const station = stations.find(s => s.id === step.stationId);
+                    const depIcon = step.dependency === 'parallel' ? '⚡' : '🔗';
+                    return `<div class="flex items-center gap-2"><div class="flex items-center gap-2 bg-white dark:bg-slate-800 rounded-lg px-3 py-2 border border-slate-200 dark:border-slate-700 shadow-sm"><span class="w-5 h-5 rounded-full bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 flex items-center justify-center text-[10px] font-bold" title="${step.dependency === 'parallel' ? 'Paralel Başlar' : 'Önceki Sırayı Bekler'}">${depIcon} ${step.stepOrder || (i+1)}</span><span class="text-xs font-bold text-slate-700 dark:text-slate-300">${station ? station.name : 'Bilinmeyen'}</span><span class="text-[10px] text-slate-500 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded px-1.5 py-0.5">${((step.estimatedMinutes||0) / 60).toFixed(1)} sa</span></div>${i < route.steps.length - 1 ? '<i data-lucide="chevron-right" class="w-4 h-4 text-slate-400"></i>' : ''}</div>`;
+                  }).join('')}
+              </div></div></div>`;
+        }).join('')}
+      </div></div>`}`;
+}
+
+function showAddRouteModal(routeId) {
+    const routes = DB.get('product_routes');
+    if (routeId) { const r = routes.find(x => x.id === routeId); tempRouteState = JSON.parse(JSON.stringify(r)); } 
+    else { tempRouteState = { id: null, productName: '', isTemplate: true, steps: [{ stationId: '', estimatedMinutes: 60, setupMinutes: 15, dependency: 'serial' }] }; }
+    
+    showModal(routeId ? 'Rota Şablonunu Düzenle' : 'Yeni Rota Şablonu', `<div class="space-y-4"><div><label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Rota Şablon Adı</label><input id="route-product-input" type="text" value="${tempRouteState.productName}" class="w-full border border-slate-300 dark:border-slate-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-slate-700 font-bold focus:ring-2 focus:ring-primary-500 outline-none" placeholder="Örn: Standart İHA Rotası" onchange="tempRouteState.productName = this.value"></div><div><div class="flex items-center justify-between mb-2"><label class="text-xs font-medium text-slate-600 dark:text-slate-400">Üretim Adımları (Operasyonlar)</label><button onclick="addRouteStepState()" class="text-xs text-primary-600 hover:text-primary-700 font-bold flex items-center gap-1 bg-primary-50 dark:bg-primary-900/30 px-2 py-1 rounded border border-primary-200 dark:border-primary-800"><i data-lucide="plus" class="w-3 h-3"></i> Adım Ekle</button></div><div id="route-steps-container" class="space-y-3 max-h-[50vh] overflow-y-auto p-1 custom-scrollbar"></div></div></div>`, () => saveRouteState());
+    renderRouteStepsState();
+}
+
+function addRouteStepState() { tempRouteState.steps.push({ stationId: '', estimatedMinutes: 60, setupMinutes: 15, dependency: 'serial' }); renderRouteStepsState(); }
+function removeRouteStepState(index) { tempRouteState.steps.splice(index, 1); renderRouteStepsState(); }
+
+function renderRouteStepsState() {
+    const container = document.getElementById('route-steps-container'); if (!container) return;
+    const stations = DB.get('stations');
+    container.innerHTML = tempRouteState.steps.map((step, i) => {
+        const stOpts = stations.map(s => `<option value="${s.id}" ${s.id == step.stationId ? 'selected' : ''}>${s.name} (${s.code})</option>`).join('');
+        return `<div class="p-3 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-800/50 relative flex flex-wrap gap-2 items-end"><div class="w-14"><span class="text-[9px] font-bold text-slate-500 uppercase">Sıra</span><input type="number" onchange="tempRouteState.steps[${i}].stepOrder = parseInt(this.value)" value="${step.stepOrder || (i+1)}" class="w-full border border-slate-300 dark:border-slate-600 rounded-lg px-2 py-1.5 text-xs bg-white dark:bg-slate-700 text-center font-black text-primary-600 outline-none"></div><div class="flex-1 min-w-[120px]"><span class="text-[9px] font-bold text-slate-500 uppercase">Bağlantı Türü</span><select onchange="tempRouteState.steps[${i}].dependency = this.value" class="w-full border border-slate-300 dark:border-slate-600 rounded-lg px-2 py-1.5 text-[10px] bg-white dark:bg-slate-700 font-bold ${step.dependency === 'parallel' ? 'text-green-600 dark:text-green-400' : 'text-slate-600 dark:text-slate-300'} outline-none"><option value="serial" ${step.dependency !== 'parallel' ? 'selected' : ''}>🔗 SERİ (Bekler)</option><option value="parallel" ${step.dependency === 'parallel' ? 'selected' : ''}>⚡ PARALEL (Bağımsız)</option></select></div><div class="flex-1 min-w-[150px]"><span class="text-[9px] font-bold text-slate-500 uppercase">İstasyon</span><select onchange="tempRouteState.steps[${i}].stationId = parseInt(this.value)" class="w-full border border-slate-300 dark:border-slate-600 rounded-lg px-2 py-1.5 text-xs bg-white dark:bg-slate-700 font-medium outline-none"><option value="">Seçiniz...</option>${stOpts}</select></div><div class="w-20"><span class="text-[9px] font-bold text-slate-500 uppercase">Süre(dk/Adet)</span><input type="number" onchange="tempRouteState.steps[${i}].estimatedMinutes = parseFloat(this.value)" value="${step.estimatedMinutes}" class="w-full border border-slate-300 dark:border-slate-600 rounded-lg px-2 py-1.5 text-xs bg-white dark:bg-slate-700 text-center font-bold outline-none"></div><button onclick="removeRouteStepState(${i})" class="text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 p-2 mb-0.5 rounded-lg border border-transparent hover:border-red-200 transition"><i data-lucide="trash-2" class="w-4 h-4"></i></button></div>`;
+    }).join('');
+    lucide.createIcons();
+}
+
+function saveRouteState() {
+    if (!tempRouteState.productName) return toast('Ad gerekli', 'error'); if (tempRouteState.steps.length === 0) return toast('Adım gerekli', 'error');
+    for(let i=0; i<tempRouteState.steps.length; i++) { const s = tempRouteState.steps[i]; if(!s.stationId || !s.estimatedMinutes) return toast('Eksik bilgi', 'error'); s.stepOrder = s.stepOrder || (i + 1); }
+    const routes = DB.get('product_routes');
+    if (tempRouteState.id) { const idx = routes.findIndex(r => r.id === tempRouteState.id); if (idx >= 0) routes[idx] = tempRouteState; } 
+    else { tempRouteState.id = DB.nextId('product_routes'); tempRouteState.isTemplate = true; routes.push(tempRouteState); }
+    DB.set('product_routes', routes); closeModal(); toast('Rota eklendi'); render();
+}
+function deleteRoute(id) { confirmDialog('Silmek istediğinize emin misiniz?', () => { DB.set('product_routes', DB.get('product_routes').filter(r => r.id !== id)); toast('Rota silindi', 'info'); render(); }); }
+
+// ============ PAGE: PLANNING (GANTT) ============
+function renderPlanning() {
+  const stations = DB.get('stations').filter(s => s.status === 'active'); const steps = DB.get('work_order_steps'); const wos = DB.get('work_orders');
+  const range = getDateRange(planningMode === 'year' ? 'year' : planningMode === 'month' ? 'month' : 'week', planningRef);
+  const modeLabels = { week:'Hafta', month:'Ay', year:'Yıl' }; const modeBtns = ['week','month','year'].map(m => `<button onclick="planningMode='${m}'; render();" class="px-3 py-1.5 text-xs rounded-lg font-medium transition-colors ${planningMode===m ? 'bg-primary-600 text-white' : 'bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700'}">${modeLabels[m]}</button>`).join('');
+
+  let columns = []; const dayNames = ['Paz','Pzt','Sal','Çar','Per','Cum','Cmt']; const monthNames = ['Oca','Şub','Mar','Nis','May','Haz','Tem','Ağu','Eyl','Eki','Kas','Ara'];
+  if (planningMode === 'week') { for (let i = 0; i < 7; i++) { const d = new Date(range.start); d.setDate(d.getDate() + i); columns.push({ label: `${dayNames[d.getDay()]} ${d.getDate()}/${d.getMonth()+1}`, start: new Date(d), end: new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59) }); } }
+  else if (planningMode === 'month') { for (let i = 0; i < range.days; i++) { const d = new Date(range.start); d.setDate(d.getDate() + i); columns.push({ label: `${d.getDate()}`, start: new Date(d), end: new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59) }); } }
+  else { for (let m = 0; m < 12; m++) columns.push({ label: monthNames[m], start: new Date(range.start.getFullYear(), m, 1), end: new Date(range.start.getFullYear(), m + 1, 0, 23, 59, 59) }); }
+
+  const totalMs = range.end.getTime() - range.start.getTime();
+  
+  const stationRows = stations.map(st => {
+    const stSteps = steps.filter(s => s.stationId === st.id && s.plannedStart && s.plannedEnd && s.status !== 'completed');
+    const bars = stSteps.map(s => {
+      const wo = wos.find(w => w.id === s.workOrderId); const ss = new Date(s.plannedStart), se = new Date(s.plannedEnd);
+      if (se < range.start || ss > range.end) return '';
+      const clampStart = Math.max(ss.getTime(), range.start.getTime()); const clampEnd = Math.min(se.getTime(), range.end.getTime());
+      const left = ((clampStart - range.start.getTime()) / totalMs * 100); const width = ((clampEnd - clampStart) / totalMs * 100);
+      const color = priorityBarColor(wo ? wo.priority : 'normal'); const label = wo ? `${wo.orderNo}` : `#${s.workOrderId}`;
+      const qty = wo ? wo.quantity : 1; const totalMin = (s.estimatedMinutes * qty) + (s.setupMinutes || 0);
+      const titleText = `${label}: İşlem ${totalMin}dk (${s.estimatedMinutes}dk x ${qty} Adet)${s.setupMinutes ? ' + Hazırlık ' + s.setupMinutes + 'dk' : ''}&#10;${formatDateTime(s.plannedStart)} → ${formatDateTime(s.plannedEnd)}`;
+      return `<div class="gantt-bar shadow-sm" data-step-id="${s.id}" style="left:${left}%;width:${Math.max(width, 0.5)}%;background:${color};" title="${titleText}"><span class="text-[9px] text-white font-bold px-1 truncate block leading-[20px] drop-shadow-md">${width > 3 ? label : ''}</span></div>`;
+    }).join('');
+    return `<div class="flex border-b border-slate-200 dark:border-slate-700/50 hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors" style="min-height:36px;"><div class="w-32 flex-shrink-0 px-3 py-2 text-[11px] font-bold border-r border-slate-200 dark:border-slate-700/50 flex items-center truncate">${st.name}</div><div class="flex-1 relative">${bars}</div></div>`;
+  }).join('');
+
+  const colWidth = 100 / columns.length; const gridLines = columns.map((c, i) => `<div class="absolute top-0 bottom-0 border-l border-slate-200/50 dark:border-slate-700/30" style="left:${i * colWidth}%"></div>`).join(''); const colHeaders = columns.map(c => `<div class="text-center text-[10px] font-medium text-slate-500 truncate" style="width:${colWidth}%">${c.label}</div>`).join('');
+
+  return `<div class="max-w-full mx-auto space-y-4"><div class="flex flex-wrap items-center justify-between gap-3"><div class="flex gap-2">${modeBtns}</div><div class="flex items-center gap-2"><button onclick="navPlanning(-1)" class="px-3 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 font-bold transition-colors shadow-sm">‹ Önceki</button><button onclick="navPlanning(0)" class="px-3 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 font-bold transition-colors shadow-sm">Bugün</button><button onclick="navPlanning(1)" class="px-3 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 font-bold transition-colors shadow-sm">Sonraki ›</button></div></div><div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-x-auto shadow-sm"><div class="flex border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50"><div class="w-32 flex-shrink-0 px-3 py-2 text-xs font-semibold text-slate-500 border-r border-slate-200 dark:border-slate-700">İstasyon</div><div class="flex-1 flex items-center">${colHeaders}</div></div><div class="relative" id="gantt-grid"><div class="absolute inset-0 pointer-events-none" style="left:128px">${gridLines}</div>${stationRows}</div></div></div>`;
+}
+
+function navPlanning(dir) {
+  if (dir === 0) { planningRef = new Date(); render(); return; } const d = new Date(planningRef);
+  if (planningMode === 'week') d.setDate(d.getDate() + dir * 7); else if (planningMode === 'month') d.setMonth(d.getMonth() + dir); else d.setFullYear(d.getFullYear() + dir);
+  planningRef = d; render();
+}
+
+function initPlanningDrag() {
+  const grid = document.getElementById('gantt-grid'); if (!grid) return;
+  let dragBar = null, startX = 0, origLeft = 0, barParent = null;
+  grid.addEventListener('mousedown', e => {
+    const bar = e.target.closest('.gantt-bar'); if (!bar) return; e.preventDefault();
+    dragBar = bar; barParent = bar.parentElement; startX = e.clientX; origLeft = parseFloat(bar.style.left); bar.style.cursor = 'grabbing'; bar.style.zIndex = '30';
+  });
+  document.addEventListener('mousemove', e => {
+    if (!dragBar || !barParent) return; const parentWidth = barParent.getBoundingClientRect().width; const dx = e.clientX - startX; const dpct = (dx / parentWidth) * 100;
+    dragBar.style.left = Math.max(0, Math.min(100 - parseFloat(dragBar.style.width), origLeft + dpct)) + '%';
+  });
+  document.addEventListener('mouseup', e => {
+    if (!dragBar || !barParent) return;
+    const stepId = parseInt(dragBar.dataset.stepId); const newLeft = parseFloat(dragBar.style.left);
+    const range = getDateRange(planningMode === 'year' ? 'year' : planningMode === 'month' ? 'month' : 'week', planningRef);
+    const totalMs = range.end.getTime() - range.start.getTime(); const steps = DB.get('work_order_steps'); const step = steps.find(s => s.id === stepId);
+    if (step) {
+      const duration = new Date(step.plannedEnd).getTime() - new Date(step.plannedStart).getTime(); const newStart = new Date(range.start.getTime() + (newLeft / 100) * totalMs); const newEnd = new Date(newStart.getTime() + duration);
+      step.plannedStart = newStart.toISOString(); step.plannedEnd = newEnd.toISOString(); DB.set('work_order_steps', steps); toast('Adım taşındı');
+    }
+    dragBar.style.cursor = 'grab'; dragBar.style.zIndex = '10'; dragBar = null; barParent = null; render();
+  });
+}
+
+// ============ PAGE: CAPACITY ============
+function renderCapacity() {
+  const stations = DB.get('stations').filter(s => s.status === 'active'); 
+  const range = getDateRange(capacityMode, capacityRef); 
+  
+  const totalCap = stations.reduce((s, st) => s + calcStationCapacityInRange(st.id, range.start, range.end), 0); 
+  const totalLoad = stations.reduce((s, st) => s + calcStationLoadInRange(st.id, range.start, range.end), 0);
+  const overallPct = totalCap > 0 ? Math.round(totalLoad / totalCap * 100) : 0;
+  const criticalCount = stations.filter(st => { const cap = calcStationCapacityInRange(st.id, range.start, range.end); return cap > 0 && (calcStationLoadInRange(st.id, range.start, range.end) / cap * 100) > 80; }).length;
+  
+  const modeLabels = { day:'Gün', week:'Hafta', month:'Ay', year:'Yıl' }; 
+  const modeBtns = ['day','week','month','year'].map(m => `<button onclick="capacityMode='${m}'; render();" class="px-3 py-1.5 text-xs rounded-lg font-medium transition-colors ${capacityMode===m ? 'bg-primary-600 text-white' : 'bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:border-primary-400'}">${modeLabels[m]}</button>`).join('');
+
+  let detailView = '';
+  if (capacityMode === 'day') {
+    detailView = stations.map(st => {
+      const load = calcStationLoadInRange(st.id, range.start, range.end); const cap = calcStationCapacityInRange(st.id, range.start, range.end); const pct = cap > 0 ? Math.round(load / cap * 100) : 0; const uc = utilizationColor(pct);
+      return `<div class="flex items-center gap-3 py-3 border-b border-slate-100 dark:border-slate-700/50 last:border-0"><span class="w-32 text-sm font-medium truncate">${st.name}</span><div class="flex-1 flex gap-1 h-6"><div class="${uc.bar} rounded shadow-sm transition-all" style="width:${Math.min(pct,100)}%;min-width:4px;"></div><div class="bg-slate-100 dark:bg-slate-700/50 rounded flex-1"></div></div><span class="text-xs w-32 text-right font-medium text-slate-500">${load.toFixed(1)} / ${cap.toFixed(1)} sa</span><span class="text-xs font-black w-12 text-right ${uc.text}">${pct}%</span></div>`;
+    }).join('');
+    detailView = `<div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-6 shadow-sm"><h3 class="font-bold text-sm mb-4">Günlük Kapasite Raporu</h3>${detailView}</div>`;
+  } else if (capacityMode === 'week') {
+    const dayNames = ['Paz','Pzt','Sal','Çar','Per','Cum','Cmt']; const days = []; const d = new Date(range.start); while (d <= range.end) { days.push(new Date(d)); d.setDate(d.getDate() + 1); }
+    const headerCells = days.map(dy => `<th class="py-3 px-2 text-center text-xs font-semibold">${dayNames[dy.getDay()]} ${dy.getDate()}.${dy.getMonth()+1}</th>`).join('');
+    const stRows = stations.map(st => {
+      const cells = days.map(dy => { 
+          const dStart = new Date(dy); dStart.setHours(0,0,0,0); const dEnd = new Date(dy); dEnd.setHours(23,59,59,999); 
+          const load = calcStationLoadInRange(st.id, dStart, dEnd); const cap = calcStationCapacityInRange(st.id, dStart, dEnd); const pct = cap > 0 ? Math.round(load / cap * 100) : 0; const uc = utilizationColor(pct); 
+          return `<td class="py-3 px-2 text-center"><div class="text-xs font-black ${uc.text}">${pct}%</div><div class="w-full bg-slate-100 dark:bg-slate-700/50 rounded-full h-1.5 mt-1 overflow-hidden"><div class="${uc.bar} h-full rounded-full" style="width:${Math.min(pct,100)}%"></div></div><div class="text-[9px] font-bold text-slate-400 mt-1">${load.toFixed(1)} / ${cap.toFixed(1)}sa</div></td>`; 
+      }).join('');
+      return `<tr class="border-b border-slate-100 dark:border-slate-700/50 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors"><td class="py-3 px-4 text-xs font-bold whitespace-nowrap">${st.name}</td>${cells}</tr>`;
+    }).join('');
+    detailView = `<div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-x-auto shadow-sm"><table class="w-full text-left"><thead><tr class="border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50"><th class="py-3 px-4 text-xs font-bold text-slate-500 uppercase">İstasyon</th>${headerCells}</tr></thead><tbody>${stRows}</tbody></table></div>`;
+  } else if (capacityMode === 'month') {
+    const dayHeaders = []; for (let i = 0; i < range.days; i++) { const dd = new Date(range.start); dd.setDate(dd.getDate() + i); dayHeaders.push(dd); }
+    const stRows = stations.map(st => {
+      const cells = dayHeaders.map(dy => { 
+          const dStart = new Date(dy); dStart.setHours(0,0,0,0); const dEnd = new Date(dy); dEnd.setHours(23,59,59,999); 
+          const load = calcStationLoadInRange(st.id, dStart, dEnd); const cap = calcStationCapacityInRange(st.id, dStart, dEnd); const pct = cap > 0 ? Math.round(load / cap * 100) : 0; const uc = utilizationColor(pct); const bgHex = pct === 0 ? 'transparent' : uc.hex + '40'; 
+          return `<div class="heatmap-cell border border-slate-100 dark:border-slate-700/50" style="background:${bgHex};" title="${st.name} - ${dy.getDate()}.${dy.getMonth()+1}: Yük ${load.toFixed(1)}sa, Kapasite ${cap.toFixed(1)}sa -> ${pct}%">${pct > 0 ? pct : ''}</div>`; 
+      }).join('');
+      return `<div class="flex items-center gap-1"><span class="w-28 text-[11px] font-bold truncate flex-shrink-0">${st.name}</span><div class="flex gap-0.5">${cells}</div></div>`;
+    }).join('');
+    const dayLabels = dayHeaders.map(d => `<div class="heatmap-cell text-slate-400 font-bold">${d.getDate()}</div>`).join('');
+    detailView = `<div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-6 overflow-x-auto shadow-sm"><h3 class="font-bold text-sm mb-6">Aylık Kapasite Isı Haritası</h3><div class="space-y-1.5"><div class="flex items-center gap-1"><span class="w-28 flex-shrink-0"></span><div class="flex gap-0.5">${dayLabels}</div></div>${stRows}</div></div>`;
+  } else {
+    const monthNames = ['Oca','Şub','Mar','Nis','May','Haz','Tem','Ağu','Eyl','Eki','Kas','Ara']; const headerCells = monthNames.map(m => `<th class="py-3 px-2 text-center text-xs font-semibold">${m}</th>`).join(''); const yr = range.start.getFullYear();
+    const stRows = stations.map(st => {
+      const cells = monthNames.map((m, i) => { 
+          const mStart = new Date(yr, i, 1); const mEnd = new Date(yr, i + 1, 0, 23, 59, 59); 
+          const load = calcStationLoadInRange(st.id, mStart, mEnd); const cap = calcStationCapacityInRange(st.id, mStart, mEnd); const pct = cap > 0 ? Math.round(load / cap * 100) : 0; const uc = utilizationColor(pct); 
+          return `<td class="py-3 px-2 text-center"><div class="text-xs font-black ${uc.text}">${pct}%</div><div class="text-[9px] font-bold text-slate-400 mt-1">${load.toFixed(0)}/${cap.toFixed(0)}sa</div></td>`; 
+      }).join('');
+      return `<tr class="border-b border-slate-100 dark:border-slate-700/50 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors"><td class="py-3 px-4 text-xs font-bold whitespace-nowrap">${st.name}</td>${cells}</tr>`;
+    }).join('');
+    detailView = `<div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-x-auto shadow-sm"><table class="w-full text-left"><thead><tr class="border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50"><th class="py-3 px-4 text-xs font-bold text-slate-500 uppercase">İstasyon</th>${headerCells}</tr></thead><tbody>${stRows}</tbody></table></div>`;
+  }
+
+  return `<div class="max-w-7xl mx-auto space-y-4"><div class="flex flex-wrap items-center justify-between gap-3"><div class="flex gap-2">${modeBtns}</div><div class="flex items-center gap-2"><button onclick="navCapacity(-1)" class="px-3 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 font-bold transition-colors shadow-sm">‹ Önceki</button><button onclick="navCapacity(0)" class="px-3 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 font-bold transition-colors shadow-sm">Bugün</button><button onclick="navCapacity(1)" class="px-3 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 font-bold transition-colors shadow-sm">Sonraki ›</button></div></div><div class="grid grid-cols-4 gap-4">${kpiCard('clock','Toplam Kapasite',`${totalCap.toFixed(0)} sa`,`Vardiya saatlerine göre`,'blue')}${kpiCard('loader','Planlanan Yük',`${totalLoad.toFixed(1)} sa`,'Sipariş adetleri dahil','yellow')}${kpiCard('gauge','Doluluk Oranı',`${overallPct}%`,overallPct > 80 ? 'Kritik seviye!' : 'Normal seviye','green')}${kpiCard('alert-circle','Kritik İstasyonlar',criticalCount,'%80 üzeri yük','red')}</div>${detailView}</div>`;
+}
+
+function navCapacity(dir) {
+  if (dir === 0) { capacityRef = new Date(); render(); return; } const d = new Date(capacityRef);
+  if (capacityMode === 'day') d.setDate(d.getDate() + dir); else if (capacityMode === 'week') d.setDate(d.getDate() + dir * 7); else if (capacityMode === 'month') d.setMonth(d.getMonth() + dir); else d.setFullYear(d.getFullYear() + dir);
+  capacityRef = d; render();
+}
+
+// ============ PAGE: STATISTICS ============
+function renderStatistics() {
+  const completedSteps = DB.get('work_order_steps').filter(s => s.status === 'completed');
+  const stats = completedSteps.map(getStepStats).filter(s => s && s.wo && s.st);
+
+  if (stats.length === 0) return `<div class="max-w-7xl mx-auto"><div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-12 text-center shadow-sm"><i data-lucide="bar-chart-3" class="w-12 h-12 mx-auto text-slate-300 dark:text-slate-600 mb-4"></i><h3 class="text-lg font-bold text-slate-500">Henüz Veri Yok</h3><p class="text-sm text-slate-400 mt-2">İstatistikler, tamamlanmış (kapatılmış) üretim adımları olduğunda görüntülenecektir.</p></div></div>`;
+
+  const totalPlanned = stats.reduce((s, x) => s + x.planned, 0);
+  const totalActual = stats.reduce((s, x) => s + x.actual, 0);
+  const overallEff = totalActual > 0 ? Math.round((totalPlanned / totalActual) * 100) : 0;
+
+  const stations = DB.get('stations').filter(s => s.status === 'active');
+  const stationAveragesHtml = stations.map(st => {
+      const stStats = stats.filter(x => x.st.id === st.id);
+      if(stStats.length === 0) return '';
+      const p = stStats.reduce((s, x) => s + x.planned, 0);
+      const a = stStats.reduce((s, x) => s + x.actual, 0);
+      const eff = a > 0 ? Math.round((p / a) * 100) : 0;
+      
+      let col = 'text-slate-500 bg-slate-50 border-slate-200 dark:bg-slate-800/50 dark:border-slate-700';
+      if(eff >= 100) col = 'text-green-600 bg-green-50 border-green-200 dark:bg-green-900/20 dark:border-green-800/50 dark:text-green-400';
+      else if(eff >= 80) col = 'text-amber-600 bg-amber-50 border-amber-200 dark:bg-amber-900/20 dark:border-amber-800/50 dark:text-amber-400';
+      else if(eff > 0) col = 'text-red-600 bg-red-50 border-red-200 dark:bg-red-900/20 dark:border-red-800/50 dark:text-red-400';
+
+      return `<div class="p-4 border rounded-2xl ${col} text-center shadow-sm flex flex-col justify-center transition-transform hover:scale-105"><div class="text-[11px] font-bold uppercase mb-1 truncate opacity-80" title="${st.name}">${st.name}</div><div class="text-3xl font-black">%${eff}</div></div>`;
+  }).join('');
+
+  const modeLabels = { daily:'Günlük', weekly:'Haftalık', monthly:'Aylık', yearly:'Yıllık' };
+  const modeBtns = ['daily','weekly','monthly','yearly'].map(m => `<button onclick="statsPeriod='${m}'; render();" class="px-4 py-1.5 text-xs rounded-lg font-bold transition-colors shadow-sm border border-slate-200 dark:border-slate-600 ${statsPeriod===m ? 'bg-primary-600 text-white border-primary-600' : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700'}">${modeLabels[m]}</button>`).join('');
+
+  const detailRows = stats.map(x => {
+      const deviation = x.actual - x.planned;
+      return `<tr class="border-b border-slate-100 dark:border-slate-700/50 text-sm hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
+          <td class="py-3 px-4 font-mono font-bold text-primary-600">${x.wo.orderNo}</td>
+          <td class="py-3 px-4 font-bold text-slate-700 dark:text-slate-300">${x.st.name}</td>
+          <td class="py-3 px-4 text-right">${(x.planned / 60).toFixed(1)} sa</td>
+          <td class="py-3 px-4 text-right">${(x.actual / 60).toFixed(1)} sa</td>
+          <td class="py-3 px-4 text-right font-bold ${deviation > 0 ? 'text-red-500' : 'text-green-500'}">${deviation > 0 ? '+' : ''}${(deviation / 60).toFixed(1)} sa</td>
+          <td class="py-3 px-4 text-right font-black ${x.eff >= 100 ? 'text-green-600 dark:text-green-400' : 'text-amber-500'}">%${x.eff}</td>
+      </tr>`;
+  }).join('');
+
+  return `<div class="max-w-7xl mx-auto space-y-8"><div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">${kpiCard('check-circle','Tamamlanan Adımlar',stats.length,'Toplam biten operasyon','green')}${kpiCard('clock','Toplam Planlanan',`${(totalPlanned/60).toFixed(1)} sa`,'Sipariş adedi ile çarpılmış','blue')}${kpiCard('timer','Gerçekleşen Süre',`${(totalActual/60).toFixed(1)} sa`,'Terminalden hesaplanan','yellow')}${kpiCard('trending-up','Genel Verimlilik',`%${overallEff}`,overallEff >= 100 ? 'Harika gidiyor!' : 'Geliştirilebilir','green')}</div>${stationAveragesHtml ? `<div><h3 class="text-sm font-bold text-slate-700 dark:text-slate-300 mb-4 flex items-center gap-2"><i data-lucide="activity" class="w-4 h-4 text-primary-500"></i> İstasyon Bazında Ortalama Verimlilik</h3><div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">${stationAveragesHtml}</div></div>` : ''}<div class="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-6 shadow-sm"><div class="flex flex-wrap items-center justify-between gap-4 mb-6"><h3 class="font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2"><i data-lucide="line-chart" class="w-5 h-5 text-primary-500"></i> İstasyonların Zaman İçindeki Verimi (Trend)</h3><div class="flex gap-2 p-1 bg-slate-100 dark:bg-slate-900 rounded-xl">${modeBtns}</div></div><div style="height:350px;"><canvas id="chart-efficiency-trend"></canvas></div></div><div class="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 overflow-x-auto shadow-sm"><div class="px-6 py-4 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50 flex items-center gap-2"><i data-lucide="table" class="w-4 h-4 text-slate-500"></i><h3 class="font-bold text-sm text-slate-700 dark:text-slate-300">Tamamlanan İşlemler Detay Tablosu</h3></div><table class="w-full text-left"><thead><tr class="border-b border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-500 uppercase tracking-wider"><th class="py-3 px-4">İş Emri</th><th class="py-3 px-4">İstasyon</th><th class="py-3 px-4 text-right">Planlanan</th><th class="py-3 px-4 text-right">Gerçekleşen</th><th class="py-3 px-4 text-right">Sapma</th><th class="py-3 px-4 text-right">Verimlilik</th></tr></thead><tbody>${detailRows}</tbody></table></div></div>`;
+}
+
+function initStatisticsCharts() {
+  requestAnimationFrame(() => {
+    const isDark = document.documentElement.classList.contains('dark');
+    const textColor = isDark ? '#94a3b8' : '#64748b';
+    const gridColor = isDark ? '#334155' : '#e2e8f0';
+
+    const stations = DB.get('stations').filter(s => s.status === 'active');
+    const allStats = DB.get('work_order_steps').filter(s => s.status === 'completed').map(getStepStats).filter(s => s && s.wo && s.st);
+
+    if (allStats.length === 0) return;
+
+    const labels = [];
+    const formatters = [];
+    const now = new Date();
+
+    if (statsPeriod === 'daily') {
+        for(let i=13; i>=0; i--) {
+            const d = new Date(now); d.setDate(d.getDate() - i);
+            labels.push(d.toLocaleDateString('tr-TR', {day:'numeric', month:'short'}));
+            formatters.push(s => s.date.getDate() === d.getDate() && s.date.getMonth() === d.getMonth() && s.date.getFullYear() === d.getFullYear());
+        }
+    } else if (statsPeriod === 'weekly') {
+        for(let i=7; i>=0; i--) {
+            const d = new Date(now); d.setDate(d.getDate() - (i*7));
+            const diff = d.getDate() - d.getDay() + (d.getDay() === 0 ? -6 : 1);
+            const ws = new Date(d.setDate(diff));
+            const we = new Date(ws); we.setDate(ws.getDate() + 6);
+            labels.push(`${ws.getDate()} ${ws.toLocaleDateString('tr-TR',{month:'short'})}`);
+            formatters.push(s => s.date >= ws && s.date <= we);
+        }
+    } else if (statsPeriod === 'monthly') {
+        for(let i=11; i>=0; i--) {
+            const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+            labels.push(d.toLocaleDateString('tr-TR', {month:'short', year:'numeric'}));
+            formatters.push(s => s.date.getMonth() === d.getMonth() && s.date.getFullYear() === d.getFullYear());
+        }
+    } else if (statsPeriod === 'yearly') {
+        for(let i=4; i>=0; i--) {
+            const y = now.getFullYear() - i;
+            labels.push(y.toString());
+            formatters.push(s => s.date.getFullYear() === y);
+        }
+    }
+
+    const colors = ['#3b82f6', '#f97316', '#22c55e', '#a855f7', '#ef4444', '#14b8a6', '#eab308', '#6366f1'];
+    const datasets = stations.map((st, i) => {
+        const stStats = allStats.filter(x => x.st.id === st.id);
+        const data = formatters.map(fmt => {
+            const periodStats = stStats.filter(fmt);
+            const p = periodStats.reduce((sum, x) => sum + x.planned, 0);
+            const a = periodStats.reduce((sum, x) => sum + x.actual, 0);
+            return a > 0 ? Math.round((p/a)*100) : null; 
+        });
+        return {
+            label: st.name,
+            data: data,
+            borderColor: colors[i % colors.length],
+            backgroundColor: colors[i % colors.length],
+            tension: 0.4,
+            spanGaps: true,
+            borderWidth: 3,
+            pointRadius: 4,
+            pointHoverRadius: 6
+        };
+    });
+
+    const elTrend = document.getElementById('chart-efficiency-trend');
+    if (elTrend) {
+        chartInstances['effTrend'] = new Chart(elTrend, {
+            type: 'line',
+            data: { labels: labels.reverse(), datasets: datasets.map(d => ({...d, data: d.data.reverse()})) },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                scales: {
+                    x: { ticks: { color: textColor, font: {family: 'Inter', weight:'bold'} }, grid: { display: false } },
+                    y: { title: { display: true, text: 'Verimlilik (%)', color: textColor, font:{weight:'bold', family:'Inter'} }, ticks: { color: textColor, font:{weight:'bold'} }, grid: { color: gridColor, borderDash: [5, 5] } }
+                },
+                plugins: {
+                    legend: { position: 'bottom', labels: { color: textColor, padding: 20, usePointStyle: true, font: {family: 'Inter', size: 12, weight:'bold'} } },
+                    tooltip: { backgroundColor: isDark ? '#1e293b' : '#ffffff', titleColor: isDark ? '#f8fafc' : '#0f172a', bodyColor: isDark ? '#cbd5e1' : '#475569', borderColor: gridColor, borderWidth: 1, padding: 12, boxPadding: 6, callbacks: { label: (ctx) => ` ${ctx.dataset.label}: %${ctx.raw || 0}` } }
+                }
+            }
+        });
+    }
+  });
+}
+
+// BAŞLAT
+render();
+</script>
+</body>
+</html>
